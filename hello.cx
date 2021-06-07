@@ -1,0 +1,615 @@
+module hello;
+
+macro import cx.macros.assert;
+macro import cx.macros.cimport;
+
+import c_header("ctype.h");
+import c_header("netdb.h");
+import c_header("stdio.h");
+import c_header("string.h");
+import c_header("sys/errno.h");
+import c_header("sys/ioctl.h");
+import c_header("sys/socket.h");
+import c_header("termios.h");
+import c_header("time.h");
+import c_header("unistd.h");
+
+import helpers : itoa, print;
+import std.string;
+
+void main() {
+    print("Starting.");
+
+    /*Buffer render_(int rows, int cols) {
+        return new Buffer(rows, cols);
+    }
+    void enter_() { }
+    auto term = new Terminal(&render_, &enter_);
+    term.enableRawMode;
+    keyDebugLoop;
+    term.disableRawMode;
+    return;*/
+
+    string channel = "##test";
+    auto irc = new IRC;
+
+    irc.connect("irc.libera.chat", 6667);
+    irc.sendln("NICK test_cx");
+    irc.sendln("USER test_cx * * :test_cx");
+
+    while (!irc.ready) {
+        irc.pump;
+    }
+    irc.sendln("JOIN " ~ channel);
+
+    mut Terminal term;
+
+    Buffer refresh(int rows, int cols) {
+        irc.pump;
+
+        // print("render(" ~ rows.itoa ~ ", " ~ cols.itoa ~ ")");
+        auto buf = new Buffer(rows, cols);
+        buf.clear(Color.blue);
+
+        // title line
+        buf.go(0, 0);
+        buf.bg(Color.grey).fg(Color.red).print("  H");
+        buf.fg(Color.black).print("ell World");
+        buf.fillRow;
+        // chat box
+        buf.fg(Color.lwhite).bg(Color.blue).printPrettyBox(1, 0, buf.rows - 2, buf.cols - 1);
+        // status line
+        buf.go(-1, 0).bg(Color.grey).fg(Color.black);
+        buf.print(" Welcome to TUI IRC Demo");
+        buf.printRight("[ " ~ Time.now.local ~ " ] ");
+
+        string[] splitLines(Message msg) {
+            int space = buf.cols - 4 - cast(int) ("[00:00:00] <".length + msg.name.length + "> ".length);
+            assert(space > 0);
+
+            mut string[] result;
+            mut string remainder = msg.line;
+            while (remainder.length > 0) {
+                auto prefix = remainder.takeTiles(space);
+                result ~= prefix;
+                remainder = remainder[prefix.length .. $];
+            }
+            return result;
+        }
+        int needsLines(Message msg) {
+            // TODO without allocation?
+            return cast(int) msg.splitLines.length;
+        }
+
+        int availableLines = buf.rows - 4;
+        mut int usedLines;
+        mut int firstMessage = cast(int) irc.messages.length;
+        while (firstMessage > 0) {
+            firstMessage -= 1;
+            usedLines += irc.messages[firstMessage].needsLines;
+            if (usedLines >= availableLines)
+                break;
+        }
+        mut int paneRow = availableLines - usedLines;
+        for (auto msg <- irc.messages[firstMessage .. $]) {
+            string[] msgLines = msg.splitLines;
+            for (mut int i = 0; i < msgLines.length; i += 1) {
+                // skip occluded lines
+                // TODO masking
+                if (paneRow >= 0) {
+                    buf.go(paneRow + 2, 2);
+                    if (i == 0) {
+                        buf.bg(Color.blue).fg(Color.black).print("[" ~ msg.time.local ~ "]");
+                        buf.skip(1).fg(Color.white).print("<");
+                        buf.fg(Color.lwhite).print(msg.name);
+                        buf.fg(Color.white).print(">").skip(1);
+                    } else {
+                        buf.skip(cast(int) ("[00:00:00] <".length + msg.name.length + "> ".length));
+                    }
+                    buf.fg(Color.lwhite).print(msgLines[i]);
+                }
+                paneRow += 1;
+            }
+        }
+        // input line
+        buf.go(-2, 2);
+        buf.bg(Color.black).fg(Color.lwhite);
+        buf.print("╡");
+        buf.bg(Color.blue).printRight("╞══╝");
+        buf.fg(Color.lyellow);
+        buf.go(-2, 3).print(" ").print(term.inputLine);
+        return buf;
+    }
+    void enter() {
+        string line = term.inputLine;
+
+        if (line == "/q" || line == "/quit") {
+            irc.sendln("QUIT");
+            term.running = false;
+            return;
+        }
+        if (line.startsWith("/me ")) {
+            string action = line[4 .. $];
+            irc.messages ~= Message(Time.now, "feep[cx]", "* feep[cx] " ~ action);
+            irc.sendln("PRIVMSG " ~ channel ~ " :\x01ACTION " ~ action ~ "\x01");
+            return;
+        }
+        irc.messages ~= Message(Time.now, "feep[cx]", line);
+        irc.sendln("PRIVMSG " ~ channel ~ " :" ~ line);
+    }
+
+    term = new Terminal(&refresh, &enter);
+    term.updateLoop;
+}
+
+struct Message
+{
+    Time time;
+    string name;
+    string line;
+}
+
+class IRC
+{
+    int sock;
+
+    string partialLineBuf;
+
+    Message[] messages;
+
+    bool ready;
+
+    this() {
+        this.sock = socket(/*AF_INET*/PF_INET, SOCK_STREAM, 0);
+    }
+
+    void connect(string host, int port) {
+        auto address = new Address(host, port);
+        int ret = .connect(this.sock, address.info.ai_addr, address.info.ai_addrlen);
+        assert(ret == 0);
+    }
+
+    void process(string line) {
+        // puts("\x1B[?1049h");
+        // print(line);
+        if (line.startsWith("PING ")) {
+            sendln("PONG " ~ line[5 .. $]);
+            return;
+        }
+        if (line.find(" 376 ") != -1) {
+            // end of motd
+            this.ready = true;
+            return;
+        }
+        auto parts = line.split(" ");
+        string mask = parts[0];
+        string cmd = parts[1];
+        if (cmd == "PRIVMSG") {
+            string channel = parts[2];
+            mut string msg = parts[3 .. $].join(" ");
+            msg = msg[msg.find(":") + 1 .. $];
+            // print("<" ~ mask.user ~ "> " ~ msg);
+            messages ~= Message(Time.now, mask.user, msg);
+        }
+        // puts("\x1B[?1049l");
+    }
+
+    void flushLine() {
+        auto pos = this.partialLineBuf.find("\n");
+        assert(pos != -1);
+        mut string line = this.partialLineBuf[0 .. pos];
+        if (line[$ - 1] == "\r"[0]) line = line[0 .. $ - 1];
+        this.partialLineBuf = this.partialLineBuf[pos + 1 .. $];
+        process(line);
+    }
+
+    void sendln(string msg) {
+        send(msg);
+        send("\n");
+    }
+
+    void send(string msg) {
+        mut int sent;
+        while (sent < msg.length) {
+            int ret = cast(int) .send(this.sock, &msg[sent], msg.length - sent, 0);
+            assert(ret > 0);
+            sent += ret;
+        }
+    }
+
+    void pump() {
+        while (true) {
+            auto buf = new char[](1024);
+            int ret = cast(int) recv(this.sock, buf.ptr, cast(int) buf.length, /*MSG_DONTWAIT*/0x40);
+            if (ret == -1 && (cxruntime_errno() == EAGAIN/* || cxruntime_errno() == EWOULDBLOCK*/))
+                return;
+            assert(ret > 0);
+            this.partialLineBuf ~= buf[0 .. ret];
+            while (this.partialLineBuf.find("\n") != -1) {
+                flushLine;
+            }
+        }
+    }
+}
+
+string user(string mask) {
+    if (mask.startsWith(":") && mask.find("!") != -1) {
+        return mask[1 .. mask.find("!")];
+    }
+    return mask;
+}
+
+struct Time {
+    time_t t;
+    static Time now() {
+        Time t;
+        time(&t.t);
+        return t;
+    }
+    string local() {
+        tm timeinfo;
+        localtime_r(&t, &timeinfo);
+        return itoa_fill(2, timeinfo.tm_hour) ~ ":"
+            ~ itoa_fill(2, timeinfo.tm_min) ~ ":"
+            ~ itoa_fill(2, timeinfo.tm_sec);
+    }
+}
+
+extern(C) int cxruntime_errno();
+
+class Address
+{
+    addrinfo* info;
+    this(string name, int port) {
+        char* namep = name.toStringz;
+        char* portp = port.itoa.toStringz;
+        mut addrinfo hints;
+        hints.ai_family = /*AF_INET*/PF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = 0;
+        int ret = getaddrinfo(namep, portp, &hints, &this.info);
+        assert(ret == 0);
+    }
+}
+
+void printPrettyBox(Buffer buf, int r0, int c0, int r1, int c1) {
+    buf.go(r0, c0).print("╔");
+    for (int i <- 0 .. c1 - c0 - 1) {
+        buf.print("═");
+    }
+    buf.print("╗");
+    for (int i <- r0 + 1 .. r1) {
+        buf.go(i, c0).print("║");
+        buf.go(i, c1).print("║");
+    }
+    buf.go(r1, c0).print("╚");
+    for (int i <- 0 .. c1 - c0 - 1) {
+        buf.print("═");
+    }
+    buf.print("╝");
+}
+
+string itoa_fill(int width, int value) {
+    mut string res = itoa(value);
+    while (res.length < width) res = "0" ~ res;
+    return res;
+}
+
+// TODO variadics
+extern(C) int ioctl(int, int, void*);
+
+struct Tile
+{
+    string ch; // may be unicode, TODO int
+    Color fg, bg;
+
+    // TODO default gen
+    bool eq(Tile other) {
+        return ch == other.ch && fg == other.fg && bg == other.bg;
+    }
+}
+
+enum Color
+{
+    black,
+    red,
+    green,
+    yellow,
+    blue,
+    magenta,
+    cyan,
+    white,
+    grey,
+    lred,
+    lgreen,
+    lyellow,
+    lblue,
+    lmagenta,
+    lcyan,
+    lwhite
+}
+
+class Buffer
+{
+    int rows, cols;
+
+    Tile[] text;
+
+    // print state, todo factor out into renderer?
+    Color fg_, bg_;
+
+    int row, col;
+
+    this(this.rows, this.cols) {
+        this.fg_ = Color.lwhite;
+        this.bg_ = Color.black;
+        this.text = new Tile[](this.rows * this.cols);
+        clear(this.bg_);
+    }
+
+    int rowsLeft() {
+        return cols - col;
+    }
+
+    Buffer print(string msg) {
+        // TODO cutoff
+        mut int i;
+        while (i < msg.length) {
+            auto chlen = msg[i .. $].utf8NextLength;
+            auto ch = msg[i .. i + chlen];
+            this.text[this.row * this.cols + this.col] = Tile(ch, this.fg_, this.bg_);
+            i += chlen;
+            this.col += 1;
+        }
+        return this;
+    }
+
+    Buffer printRight(string msg) {
+        // TODO cutoff
+        int start = this.row * this.cols;
+        for (int i <- this.col .. this.cols - msg.utf8Length) {
+            this.text[start + i] = Tile(" ", this.fg_, this.bg_);
+            this.col += 1;
+        }
+        mut int k;
+        for (int i <- 0 .. msg.utf8Length) {
+            auto chlen = msg[k .. $].utf8NextLength;
+            auto ch = msg[k .. k + chlen];
+            k += chlen;
+            this.text[start + this.col] = Tile(ch, this.fg_, this.bg_);
+            this.col += 1;
+        }
+        return this;
+    }
+
+    Buffer go(mut int row, mut int col) {
+        if (row < 0) row = this.rows - -row;
+        if (col < 0) col = this.cols - -col;
+        this.row = row;
+        this.col = col;
+        return this;
+    }
+
+    Buffer fg(Color fg) {
+        this.fg_ = fg;
+        return this;
+    }
+
+    Buffer bg(Color bg) {
+        this.bg_ = bg;
+        return this;
+    }
+
+    Buffer clear(Color bg) {
+        this.bg_ = bg;
+        for (int i <- 0 .. this.text.length) {
+            this.text[i] = Tile(" ", this.fg_, this.bg_);
+        }
+        return this;
+    }
+
+    Buffer skip(int cols) {
+        this.col += cols;
+        return this;
+    }
+
+    Buffer fillRow() {
+        int base = this.row * this.cols + this.col;
+        for (int i <- 0 .. this.cols - this.col) {
+            this.text[base + i] = Tile(" ", this.fg_, this.bg_);
+        }
+    }
+
+    Tile[] line(int row) {
+        return this.text[this.cols * row .. this.cols * (row + 1)];
+    }
+}
+
+// Amount of tiles needed to render the text
+int tileLength(string text) {
+    // TODO full-width characters
+    // TODO filter ansi
+    return text.utf8Length;
+}
+
+// return an n-tile length prefix of text.
+string takeTiles(string text, int length) {
+    // TODO full-width characters
+    // TODO filter ansi
+    mut int offset;
+    while (offset < text.length && offset + text[offset .. $].utf8NextLength <= length)
+    {
+        offset += text[offset .. $].utf8NextLength;
+    }
+    return text[0 .. offset];
+}
+
+void puts(string msg) {
+    write(STDOUT_FILENO, msg.ptr, msg.length);
+}
+
+class Terminal
+{
+    termios original;
+
+    Buffer currentScreenState;
+
+    string inputLine;
+
+    Buffer delegate(int, int) render;
+
+    void delegate() enter;
+
+    bool running;
+
+    (int rows, int cols) getSize() {
+        mut winsize sz;
+        ioctl(0, TIOCGWINSZ, &sz);
+        return (sz.ws_row, sz.ws_col);
+    }
+
+    this(this.render, this.enter) {
+        auto sz = getSize;
+
+        this.currentScreenState = new Buffer(sz.rows, sz.cols);
+        this.running = true;
+    }
+
+    void update() {
+        auto sz = getSize;
+        auto newbuf = render(sz.rows, sz.cols);
+        paint(newbuf);
+    }
+
+    void updateLoop() {
+        enableRawMode;
+        mut char c;
+        while (running) {
+            update;
+            c = 0;
+            read(STDIN_FILENO, &c, 1);
+            if (c == cast(char) 0) continue;
+            if (c == cast(char) 10) {
+                enter();
+                inputLine = "";
+                continue;
+            }
+            if ((c == cast(char) 127 || c == cast(char) 8) && inputLine.length > 0) {
+                inputLine = inputLine[0 .. $ - 1];
+                continue;
+            }
+            if (!iscntrl(c) && cast(int) c < 127) {
+                inputLine ~= c;
+            }
+        }
+        disableRawMode;
+    }
+
+    void paint(Buffer newBuf) {
+        // TODO compare tuples
+        bool refresh = newBuf.rows != currentScreenState.rows || newBuf.cols != currentScreenState.cols;
+        mut Color fg, bg;
+        for (int i <- 0 .. newBuf.rows) {
+            auto line = newBuf.line(i);
+            mut bool mustGoTo = true;
+            for (int k <- 0 .. newBuf.cols) {
+                auto tile = line[k];
+                if (!refresh) {
+                    auto oldLine = currentScreenState.line(i);
+                    auto oldTile = oldLine[k];
+                    if (tile.eq(oldTile)) {
+                        mustGoTo = true;
+                        continue;
+                    }
+                }
+                if (mustGoTo) {
+                    puts("\x1B[" ~ itoa(i + 1) ~ ";" ~ itoa(k + 1) ~ "H");
+                    mustGoTo = false;
+                }
+                if (fg != tile.fg || bg != tile.bg) {
+                    int translate(Color c) {
+                        int i = cast(int) c;
+                        if (i > 7) return 90 + i - 8;
+                        return 30 + i;
+                    }
+                    puts("\x1B[" ~ itoa(translate(tile.fg)) ~ ";" ~ itoa(translate(tile.bg) + 10) ~ "m");
+                    fg = tile.fg;
+                    bg = tile.bg;
+                }
+                puts(tile.ch);
+            }
+        }
+        puts("\x1B[" ~ itoa(newBuf.row + 1) ~ ";" ~ itoa(newBuf.col + 1) ~ "H");
+        // TODO why does this leak otherwise?
+        this.currentScreenState.text = [];
+        this.currentScreenState = newBuf;
+    }
+
+    void enableRawMode() {
+        tcgetattr(STDIN_FILENO, &this.original);
+        mut auto raw = this.original;
+        raw.c_lflag = raw.c_lflag & (ECHO | ICANON).bitflip;
+        // raw.c_cc[VMIN] = 0;
+        // raw.c_cc[VTIME] = 1;
+        raw.c_cc._6 = 0;
+        raw.c_cc._5 = 1;
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+        puts("\x1B[?1049h");
+    }
+
+    void disableRawMode() {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &original);
+        puts("\x1B[?1049l");
+    }
+}
+
+int bitflip(int i) { return -i - 1; }
+
+void keyDebugLoop() {
+    mut char c;
+    while (c != "q"[0]) {
+        c = 0;
+        read(STDIN_FILENO, &c, 1);
+        if (c == cast(char) 0) continue;
+        if (iscntrl(c)) {
+            print(itoa(c));
+        } else {
+            print(itoa(c) ~ " (" ~ c ~ ")");
+        }
+    }
+}
+
+// TODO std.uni, by-codepoint iteration
+int utf8NextLength(string text)
+{
+    // see https://en.wikipedia.org/wiki/UTF-8#FSS-UTF
+    if (text.length < 1) return 0;
+    int ch0 = text[0];
+    if (ch0 < 128) return 1;
+    assert(ch0 >= 192);
+    assert(text.length >= 2);
+    if (ch0 < 224) return 2;
+    assert(text.length >= 3);
+    if (ch0 < 240) return 3;
+    assert(text.length >= 4);
+    if (ch0 < 248) return 4;
+    assert(text.length >= 5);
+    if (ch0 < 252) return 5;
+    assert(text.length >= 6);
+    if (ch0 < 254) return 6;
+    assert(false);
+}
+
+int min(int a, int b) {
+    if (a < b) return a;
+    return b;
+}
+
+int utf8Length(mut string text) {
+    mut int i;
+    while (text.length) {
+        i += 1;
+        text = text[text.utf8NextLength .. $];
+    }
+    return i;
+}
