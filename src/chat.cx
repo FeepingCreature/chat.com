@@ -1,0 +1,196 @@
+module chat;
+
+macro import cx.macros.assert;
+macro import cx.macros.cimport;
+
+import c_header("ctype.h");
+import c_header("string.h");
+import c_header("unistd.h");
+
+import helpers : itoa, print;
+import std.string;
+
+import irc;
+import terminal;
+import time;
+import utf;
+
+void main() {
+    print("Starting.");
+
+    /*Buffer render_(int rows, int cols) {
+        return new Buffer(rows, cols);
+    }
+    void enter_() { }
+    auto term = new Terminal(&render_, &enter_);
+    term.enableRawMode;
+    keyDebugLoop;
+    term.disableRawMode;
+    return;*/
+
+    string channel = "##test";
+    auto irc = new IRC;
+
+    irc.connect("irc.libera.chat", 6667);
+    irc.sendln("NICK test_cx");
+    irc.sendln("USER test_cx * * :test_cx");
+
+    while (!irc.ready) {
+        irc.pump;
+    }
+    irc.sendln("JOIN " ~ channel);
+
+    mut Terminal term;
+
+    Buffer refresh(int rows, int cols) {
+        irc.pump;
+
+        // print("render(" ~ rows.itoa ~ ", " ~ cols.itoa ~ ")");
+        auto buf = new Buffer(rows, cols);
+        buf.clear(Color.blue);
+
+        // title line
+        buf.go(0, 0);
+        buf.bg(Color.grey).fg(Color.red).print("  H");
+        buf.fg(Color.black).print("ell World");
+        buf.fillRow;
+        // chat box
+        buf.fg(Color.lwhite).bg(Color.blue).printPrettyBox(1, 0, buf.rows - 2, buf.cols - 1);
+        // status line
+        buf.go(-1, 0).bg(Color.grey).fg(Color.black);
+        buf.print(" Welcome to TUI IRC Demo");
+        buf.printRight("[ " ~ Time.now.local ~ " ] ");
+
+        string[] splitLines(Message msg) {
+            int space = buf.cols - 4 - cast(int) ("[00:00:00] <".length + msg.name.length + "> ".length);
+            assert(space > 0);
+
+            mut string[] result;
+            mut string remainder = msg.line;
+            while (remainder.length > 0) {
+                auto prefix = remainder.takeTiles(space);
+                result ~= prefix;
+                remainder = remainder[prefix.length .. $];
+            }
+            return result;
+        }
+        int needsLines(Message msg) {
+            // TODO without allocation?
+            return cast(int) msg.splitLines.length;
+        }
+
+        int availableLines = buf.rows - 4;
+        mut int usedLines;
+        mut int firstMessage = cast(int) irc.messages.length;
+        while (firstMessage > 0) {
+            firstMessage -= 1;
+            usedLines += irc.messages[firstMessage].needsLines;
+            if (usedLines >= availableLines)
+                break;
+        }
+        mut int paneRow = availableLines - usedLines;
+        for (auto msg <- irc.messages[firstMessage .. $]) {
+            string[] msgLines = msg.splitLines;
+            for (mut int i = 0; i < msgLines.length; i += 1) {
+                // skip occluded lines
+                // TODO masking
+                if (paneRow >= 0) {
+                    buf.go(paneRow + 2, 2);
+                    if (i == 0) {
+                        buf.bg(Color.blue).fg(Color.black).print("[" ~ msg.time.local ~ "]");
+                        buf.skip(1).fg(Color.white).print("<");
+                        buf.fg(Color.lwhite).print(msg.name);
+                        buf.fg(Color.white).print(">").skip(1);
+                    } else {
+                        buf.skip(cast(int) ("[00:00:00] <".length + msg.name.length + "> ".length));
+                    }
+                    buf.fg(Color.lwhite).print(msgLines[i]);
+                }
+                paneRow += 1;
+            }
+        }
+        // input line
+        buf.go(-2, 2);
+        buf.bg(Color.black).fg(Color.lwhite);
+        buf.print("╡");
+        buf.bg(Color.blue).printRight("╞══╝");
+        buf.fg(Color.lyellow);
+        buf.go(-2, 3).print(" ").print(term.inputLine);
+        return buf;
+    }
+    void enter() {
+        string line = term.inputLine;
+
+        if (line == "/q" || line == "/quit") {
+            irc.sendln("QUIT");
+            term.running = false;
+            return;
+        }
+        if (line.startsWith("/me ")) {
+            string action = line[4 .. $];
+            irc.messages ~= Message(Time.now, "feep[cx]", "* feep[cx] " ~ action);
+            irc.sendln("PRIVMSG " ~ channel ~ " :\x01ACTION " ~ action ~ "\x01");
+            return;
+        }
+        irc.messages ~= Message(Time.now, "feep[cx]", line);
+        irc.sendln("PRIVMSG " ~ channel ~ " :" ~ line);
+    }
+
+    term = new Terminal(&refresh, &enter);
+    term.updateLoop;
+}
+
+void printPrettyBox(Buffer buf, int r0, int c0, int r1, int c1) {
+    buf.go(r0, c0).print("╔");
+    for (int i <- 0 .. c1 - c0 - 1) {
+        buf.print("═");
+    }
+    buf.print("╗");
+    for (int i <- r0 + 1 .. r1) {
+        buf.go(i, c0).print("║");
+        buf.go(i, c1).print("║");
+    }
+    buf.go(r1, c0).print("╚");
+    for (int i <- 0 .. c1 - c0 - 1) {
+        buf.print("═");
+    }
+    buf.print("╝");
+}
+
+// Amount of tiles needed to render the text
+int tileLength(string text) {
+    // TODO full-width characters
+    // TODO filter ansi
+    return text.utf8Length;
+}
+
+// return an n-tile length prefix of text.
+string takeTiles(string text, int length) {
+    // TODO full-width characters
+    // TODO filter ansi
+    mut int offset;
+    while (offset < text.length && offset + text[offset .. $].utf8NextLength <= length)
+    {
+        offset += text[offset .. $].utf8NextLength;
+    }
+    return text[0 .. offset];
+}
+
+void keyDebugLoop() {
+    mut char c;
+    while (c != "q"[0]) {
+        c = 0;
+        read(STDIN_FILENO, &c, 1);
+        if (c == cast(char) 0) continue;
+        if (iscntrl(c)) {
+            print(itoa(c));
+        } else {
+            print(itoa(c) ~ " (" ~ c ~ ")");
+        }
+    }
+}
+
+int min(int a, int b) {
+    if (a < b) return a;
+    return b;
+}

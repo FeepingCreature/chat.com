@@ -1,0 +1,23 @@
+module socket;
+
+macro import cx.macros.assert;
+macro import cx.macros.cimport;
+
+import c_header("netdb.h");
+
+import std.string;
+
+class Address
+{
+    addrinfo* info;
+    this(string name, int port) {
+        char* namep = name.toStringz;
+        char* portp = port.itoa.toStringz;
+        mut addrinfo hints;
+        hints.ai_family = /*AF_INET*/PF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = 0;
+        int ret = getaddrinfo(namep, portp, &hints, &this.info);
+        assert(ret == 0);
+    }
+}

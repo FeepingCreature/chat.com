@@ -1,0 +1,111 @@
+module irc;
+
+macro import cx.macros.assert;
+macro import cx.macros.cimport;
+
+import c_header("sys/errno.h");
+import c_header("sys/socket.h");
+
+import std.string;
+
+import socket;
+import time;
+
+struct Message
+{
+    Time time;
+    string name;
+    string line;
+}
+
+class IRC
+{
+    int sock;
+
+    string partialLineBuf;
+
+    Message[] messages;
+
+    bool ready;
+
+    this() {
+        this.sock = socket(/*AF_INET*/PF_INET, SOCK_STREAM, 0);
+    }
+
+    void connect(string host, int port) {
+        auto address = new Address(host, port);
+        int ret = .connect(this.sock, address.info.ai_addr, address.info.ai_addrlen);
+        assert(ret == 0);
+    }
+
+    void process(string line) {
+        // puts("\x1B[?1049h");
+        // print(line);
+        if (line.startsWith("PING ")) {
+            sendln("PONG " ~ line[5 .. $]);
+            return;
+        }
+        if (line.find(" 376 ") != -1) {
+            // end of motd
+            this.ready = true;
+            return;
+        }
+        auto parts = line.split(" ");
+        string mask = parts[0];
+        string cmd = parts[1];
+        if (cmd == "PRIVMSG") {
+            string channel = parts[2];
+            mut string msg = parts[3 .. $].join(" ");
+            msg = msg[msg.find(":") + 1 .. $];
+            // print("<" ~ mask.user ~ "> " ~ msg);
+            messages ~= Message(Time.now, mask.user, msg);
+        }
+        // puts("\x1B[?1049l");
+    }
+
+    void flushLine() {
+        auto pos = this.partialLineBuf.find("\n");
+        assert(pos != -1);
+        mut string line = this.partialLineBuf[0 .. pos];
+        if (line[$ - 1] == "\r"[0]) line = line[0 .. $ - 1];
+        this.partialLineBuf = this.partialLineBuf[pos + 1 .. $];
+        process(line);
+    }
+
+    void sendln(string msg) {
+        send(msg);
+        send("\n");
+    }
+
+    void send(string msg) {
+        mut int sent;
+        while (sent < msg.length) {
+            int ret = cast(int) .send(this.sock, &msg[sent], msg.length - sent, 0);
+            assert(ret > 0);
+            sent += ret;
+        }
+    }
+
+    void pump() {
+        while (true) {
+            auto buf = new char[](1024);
+            int ret = cast(int) recv(this.sock, buf.ptr, cast(int) buf.length, /*MSG_DONTWAIT*/0x40);
+            if (ret == -1 && (cxruntime_errno() == EAGAIN/* || cxruntime_errno() == EWOULDBLOCK*/))
+                return;
+            assert(ret > 0);
+            this.partialLineBuf ~= buf[0 .. ret];
+            while (this.partialLineBuf.find("\n") != -1) {
+                flushLine;
+            }
+        }
+    }
+}
+
+string user(string mask) {
+    if (mask.startsWith(":") && mask.find("!") != -1) {
+        return mask[1 .. mask.find("!")];
+    }
+    return mask;
+}
+
+extern(C) int cxruntime_errno();

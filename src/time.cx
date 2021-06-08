@@ -1,0 +1,29 @@
+module time;
+
+macro import cx.macros.cimport;
+
+import helpers : itoa;
+
+import c_header("time.h");
+
+struct Time {
+    time_t t;
+    static Time now() {
+        Time t;
+        time(&t.t);
+        return t;
+    }
+    string local() {
+        tm timeinfo;
+        localtime_r(&t, &timeinfo);
+        return itoa_fill(2, timeinfo.tm_hour) ~ ":"
+            ~ itoa_fill(2, timeinfo.tm_min) ~ ":"
+            ~ itoa_fill(2, timeinfo.tm_sec);
+    }
+}
+
+string itoa_fill(int width, int value) {
+    mut string res = itoa(value);
+    while (res.length < width) res = "0" ~ res;
+    return res;
+}
