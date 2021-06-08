@@ -47,22 +47,38 @@ void main() {
 
         // print("render(" ~ rows.itoa ~ ", " ~ cols.itoa ~ ")");
         auto buf = new Buffer(rows, cols);
-        buf.clear(Color.blue);
+        mut auto view = buf.view;
+
+        view.clear(Color.blue);
 
         // title line
-        buf.go(0, 0);
-        buf.bg(Color.grey).fg(Color.red).print("  H");
-        buf.fg(Color.black).print("ell World");
-        buf.fillRow;
-        // chat box
-        buf.fg(Color.lwhite).bg(Color.blue).printPrettyBox(1, 0, buf.rows - 2, buf.cols - 1);
+        view.go(0, 0);
+        view.bg(Color.grey).fg(Color.red).print("  H");
+        view.fg(Color.black).print("ell World");
+        view.fillRow;
+        view = view.shrink(top_rows=1, 0, 0, 0);
+
         // status line
-        buf.go(-1, 0).bg(Color.grey).fg(Color.black);
-        buf.print(" Welcome to TUI IRC Demo");
-        buf.printRight("[ " ~ Time.now.local ~ " ] ");
+        view.go(-1, 0).bg(Color.grey).fg(Color.black);
+        view.print(" Welcome to TUI IRC Demo");
+        view.printRight("[ " ~ Time.now.local ~ " ] ");
+        view = view.shrink(0, 0, bottom_rows=1, 0);
+
+        // chat box
+        view.fg(Color.lwhite).bg(Color.blue).printPrettyBox(0, 0, view.rows - 1, view.cols - 1);
+
+        // input line
+        view.go(-1, 2);
+        view.bg(Color.blue).fg(Color.lwhite);
+        view.print("╡");
+        view.bg(Color.blue).printRight("╞══╝");
+        view.fg(Color.lyellow);
+        view.go(-1, 3).print(" ").print(term.inputLine);
+
+        view = view.shrink(1, 1, 1, 1);
 
         string[] splitLines(Message msg) {
-            int space = buf.cols - 4 - cast(int) ("[00:00:00] <".length + msg.name.length + "> ".length);
+            int space = view.cols - cast(int) (" [00:00:00] <".length + msg.name.length + "> ".length);
             assert(space > 0);
 
             mut string[] result;
@@ -79,7 +95,7 @@ void main() {
             return cast(int) msg.splitLines.length;
         }
 
-        int availableLines = buf.rows - 4;
+        int availableLines = view.rows;
         mut int usedLines;
         mut int firstMessage = cast(int) irc.messages.length;
         while (firstMessage > 0) {
@@ -94,28 +110,19 @@ void main() {
             for (mut int i = 0; i < msgLines.length; i += 1) {
                 // skip occluded lines
                 // TODO masking
-                if (paneRow >= 0) {
-                    buf.go(paneRow + 2, 2);
-                    if (i == 0) {
-                        buf.bg(Color.blue).fg(Color.black).print("[" ~ msg.time.local ~ "]");
-                        buf.skip(1).fg(Color.white).print("<");
-                        buf.fg(Color.lwhite).print(msg.name);
-                        buf.fg(Color.white).print(">").skip(1);
-                    } else {
-                        buf.skip(cast(int) ("[00:00:00] <".length + msg.name.length + "> ".length));
-                    }
-                    buf.fg(Color.lwhite).print(msgLines[i]);
+                view.go(paneRow, 0);
+                if (i == 0) {
+                    view.bg(Color.blue).fg(Color.black).print(" [" ~ msg.time.local ~ "]");
+                    view.skip(1).fg(Color.white).print("<");
+                    view.fg(Color.lwhite).print(msg.name);
+                    view.fg(Color.white).print(">").skip(1);
+                } else {
+                    view.skip(cast(int) ("[00:00:00] <".length + msg.name.length + "> ".length));
                 }
                 paneRow += 1;
+                view.fg(Color.lwhite).print(msgLines[i]);
             }
         }
-        // input line
-        buf.go(-2, 2);
-        buf.bg(Color.black).fg(Color.lwhite);
-        buf.print("╡");
-        buf.bg(Color.blue).printRight("╞══╝");
-        buf.fg(Color.lyellow);
-        buf.go(-2, 3).print(" ").print(term.inputLine);
         return buf;
     }
     void enter() {
@@ -140,21 +147,21 @@ void main() {
     term.updateLoop;
 }
 
-void printPrettyBox(Buffer buf, int r0, int c0, int r1, int c1) {
-    buf.go(r0, c0).print("╔");
+void printPrettyBox(View view, int r0, int c0, int r1, int c1) {
+    view.go(r0, c0).print("╔");
     for (int i <- 0 .. c1 - c0 - 1) {
-        buf.print("═");
+        view.print("═");
     }
-    buf.print("╗");
+    view.print("╗");
     for (int i <- r0 + 1 .. r1) {
-        buf.go(i, c0).print("║");
-        buf.go(i, c1).print("║");
+        view.go(i, c0).print("║");
+        view.go(i, c1).print("║");
     }
-    buf.go(r1, c0).print("╚");
+    view.go(r1, c0).print("╚");
     for (int i <- 0 .. c1 - c0 - 1) {
-        buf.print("═");
+        view.print("═");
     }
-    buf.print("╝");
+    view.print("╝");
 }
 
 // Amount of tiles needed to render the text

@@ -158,46 +158,56 @@ enum Color
     lwhite
 }
 
-class Buffer
+final class View
 {
-    int rows, cols;
+    Buffer target;
 
-    Tile[] text;
+    // relative to viewmask
+    int row, col;
 
     // print state, todo factor out into renderer?
     Color fg_, bg_;
 
-    int row, col;
+    ((int row, int col) from, (int row, int col) to) viewmask;
 
-    this(this.rows, this.cols) {
+    this(this.target, int from_row, int from_col, int to_row, int to_col) {
+        this.viewmask = ((from_row, from_col), (to_row, to_col));
         this.fg_ = Color.lwhite;
         this.bg_ = Color.black;
-        this.text = new Tile[](this.rows * this.cols);
-        clear(this.bg_);
     }
 
-    int rowsLeft() {
-        return cols - col;
+    int rows() { return viewmask.to.row - viewmask.from.row; }
+
+    int cols() { return viewmask.to.col - viewmask.from.col; }
+
+    int rowsLeft() { return cols - col; }
+
+    void putchar(int row, int col, string ch) {
+        if (row >= 0 && row < rows && col >= 0 && col < cols) {
+            int targetRow = row + this.viewmask.from.row;
+            int targetCol = col + this.viewmask.from.col;
+
+            this.target.text[targetRow * target.cols + targetCol] = Tile(ch, this.fg_, this.bg_);
+        }
     }
 
-    Buffer print(string msg) {
-        // TODO cutoff
+    View print(string msg) {
         mut int i;
         while (i < msg.length) {
             auto chlen = msg[i .. $].utf8NextLength;
             auto ch = msg[i .. i + chlen];
-            this.text[this.row * this.cols + this.col] = Tile(ch, this.fg_, this.bg_);
+            putchar(row=this.row, col=this.col, ch=ch);
             i += chlen;
             this.col += 1;
         }
         return this;
     }
 
-    Buffer printRight(string msg) {
+    View printRight(string msg) {
         // TODO cutoff
         int start = this.row * this.cols;
         for (int i <- this.col .. this.cols - msg.utf8Length) {
-            this.text[start + i] = Tile(" ", this.fg_, this.bg_);
+            putchar(row=this.row, col=i, ch=" ");
             this.col += 1;
         }
         mut int k;
@@ -205,13 +215,13 @@ class Buffer
             auto chlen = msg[k .. $].utf8NextLength;
             auto ch = msg[k .. k + chlen];
             k += chlen;
-            this.text[start + this.col] = Tile(ch, this.fg_, this.bg_);
+            putchar(row=this.row, col=this.col, ch=ch);
             this.col += 1;
         }
         return this;
     }
 
-    Buffer go(mut int row, mut int col) {
+    View go(mut int row, mut int col) {
         if (row < 0) row = this.rows - -row;
         if (col < 0) col = this.cols - -col;
         this.row = row;
@@ -219,34 +229,61 @@ class Buffer
         return this;
     }
 
-    Buffer fg(Color fg) {
+    View fg(Color fg) {
         this.fg_ = fg;
         return this;
     }
 
-    Buffer bg(Color bg) {
+    View bg(Color bg) {
         this.bg_ = bg;
         return this;
     }
 
-    Buffer clear(Color bg) {
+    View clear(Color bg) {
         this.bg_ = bg;
-        for (int i <- 0 .. this.text.length) {
-            this.text[i] = Tile(" ", this.fg_, this.bg_);
+        for (int y <- 0 .. this.rows) {
+            for (int x <- 0 .. this.cols) {
+                putchar(row=y, col=x, ch=" ");
+            }
         }
         return this;
     }
 
-    Buffer skip(int cols) {
+    View skip(int cols) {
         this.col += cols;
         return this;
     }
 
-    Buffer fillRow() {
+    View shrink(int top_rows, int left_cols, int bottom_rows, int right_cols) {
+        return new View(
+            this.target,
+            viewmask.from.row + top_rows, viewmask.from.col + left_cols,
+            viewmask.to.row - bottom_rows, viewmask.to.col - right_cols);
+    }
+
+    View fillRow() {
         int base = this.row * this.cols + this.col;
         for (int i <- 0 .. this.cols - this.col) {
-            this.text[base + i] = Tile(" ", this.fg_, this.bg_);
+            putchar(row=this.row, col=this.col + i, ch=" ");
         }
+        return this;
+    }
+}
+
+class Buffer
+{
+    int rows, cols;
+
+    Tile[] text;
+
+    int row, col;
+
+    this(this.rows, this.cols) {
+        this.text = new Tile[](this.rows * this.cols);
+    }
+
+    View view() {
+        return new View(this, 0, 0, rows, cols);
     }
 
     Tile[] line(int row) {
