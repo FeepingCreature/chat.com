@@ -23,6 +23,17 @@ int utf8NextLength(string text)
     assert(false);
 }
 
+string utf8RemoveLastCode(string text)
+{
+    mut int end = cast(int) text.length;
+    // 0b10xxxxxx
+    while (end > 0 && (cast(int) text[end - 1]) & 192 == 128) {
+        end -= 1;
+    }
+    assert(end > 0);
+    return text[0 .. end - 1];
+}
+
 int utf8Length(mut string text) {
     mut int i;
     while (text.length) {

@@ -3,14 +3,27 @@ module terminal;
 macro import cx.macros.cimport;
 
 import c_header("ctype.h");
+import c_header("locale.h");
 import c_header("stdio.h");
+import c_header("stdlib.h");
 import c_header("sys/ioctl.h");
 import c_header("termios.h");
 import c_header("unistd.h");
+import c_header("wchar.h");
 
 import helpers : itoa;
 
 import utf;
+
+extern(C) int cxruntime_errno();
+
+// TODO fix C import
+struct timespec {
+    time_t tv_sec;
+    int tv_nsec;
+}
+
+extern(C) int nanosleep(timespec* req, timespec* rem);
 
 class Terminal
 {
@@ -46,24 +59,40 @@ class Terminal
     }
 
     void updateLoop() {
+        setlocale(__LC_ALL, "".toStringz);
         enableRawMode;
-        mut char c;
         while (running) {
             update;
-            c = 0;
-            read(STDIN_FILENO, &c, 1);
-            if (c == cast(char) 0) continue;
-            if (c == cast(char) 10) {
+            // I could use select here
+            // but then again fuck select tho
+            // horrible platform dependent piece of mess
+            int data;
+            ioctl(0, FIONREAD, &data);
+            if (data == 0) {
+                timespec tenms = timespec(0, 10000000);
+                nanosleep(&tenms, null);
+                continue;
+            }
+            int c = getwchar;
+            if (c == -1 && cxruntime_errno() == 84) {
+                print("EILSEQ");
+                assert(false);
+            }
+            // .print(itoa(c));
+            if (c == 0) continue;
+            if (c == 10) {
                 enter();
                 inputLine = "";
                 continue;
             }
-            if ((c == cast(char) 127 || c == cast(char) 8) && inputLine.length > 0) {
-                inputLine = inputLine[0 .. $ - 1];
+            if ((c == 127 || c == 8) && inputLine.length > 0) {
+                inputLine = inputLine.utf8RemoveLastCode;
                 continue;
             }
-            if (!iscntrl(c) && cast(int) c < 127) {
-                inputLine ~= c;
+            if (!iscntrl(c)) {
+                auto buffer = new char[](16);
+                int len = wctomb(buffer.ptr, c);
+                inputLine ~= buffer[0 .. len];
             }
         }
         disableRawMode;
@@ -115,14 +144,14 @@ class Terminal
         raw.c_lflag = raw.c_lflag & (ECHO | ICANON).bitflip;
         // raw.c_cc[VMIN] = 0;
         // raw.c_cc[VTIME] = 1;
-        raw.c_cc._6 = 0;
-        raw.c_cc._5 = 1;
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-        puts("\x1B[?1049h");
+        // raw.c_cc._6 = 0;
+        // raw.c_cc._5 = 1;
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+        // puts("\x1B[?1049h");
     }
 
     void disableRawMode() {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &original);
+        tcsetattr(STDIN_FILENO, TCSANOW, &original);
         puts("\x1B[?1049l");
     }
 }
