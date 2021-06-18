@@ -1,6 +1,8 @@
 module terminal;
 
+macro import cx.macros.assert;
 macro import cx.macros.cimport;
+macro import cx.macros.listcomprehension;
 
 import c_header("ctype.h");
 import c_header("locale.h");
@@ -20,10 +22,27 @@ extern(C) int cxruntime_errno();
 // TODO fix C import
 struct timespec {
     time_t tv_sec;
-    int tv_nsec;
+    long tv_nsec;
 }
 
 extern(C) int nanosleep(timespec* req, timespec* rem);
+
+enum SpecialKey {
+    Enter, Backspace, Escape,
+    Left, Right, Up, Down,
+    F1, F2, F3, F4,
+    F5, F6, F7, F8,
+    F9, F10, F11, F12,
+}
+
+alias InputEvent = (:key, string text | (:specialKey, SpecialKey key));
+
+class Widget
+{
+    void render(View view, bool focus) { }
+
+    void input(InputEvent event) { }
+}
 
 class Terminal
 {
@@ -31,11 +50,7 @@ class Terminal
 
     Buffer currentScreenState;
 
-    string inputLine;
-
-    Buffer delegate(int, int) render;
-
-    void delegate() enter;
+    Widget widget;
 
     bool running;
 
@@ -45,7 +60,7 @@ class Terminal
         return (sz.ws_row, sz.ws_col);
     }
 
-    this(this.render, this.enter) {
+    this(this.widget) {
         auto sz = getSize;
 
         this.currentScreenState = new Buffer(sz.rows, sz.cols);
@@ -54,45 +69,100 @@ class Terminal
 
     void update() {
         auto sz = getSize;
-        auto newbuf = render(sz.rows, sz.cols);
+        auto newbuf = new Buffer(sz.rows, sz.cols);
+        auto view = newbuf.view;
+
+        view.clear(Color.blue);
+        widget.render(view, true);
         paint(newbuf);
     }
 
     void updateLoop() {
         setlocale(__LC_ALL, "".toStringz);
         enableRawMode;
+        mut int available = 0;
+        int waitwchar((:update|:none) doUpdate) {
+            while (running) {
+                doUpdate.case {
+                    (:update): update;
+                    (:none): { }
+                }
+                if (available == 0) {
+                    int data;
+                    ioctl(0, FIONREAD, &data);
+                    if (data == 0) {
+                        timespec sleep = timespec(0, 100000000);
+                        nanosleep(&sleep, null);
+                        continue;
+                    }
+                    available = data;
+                }
+                int c = getwchar;
+                if (c == -1 && cxruntime_errno() == 84) {
+                    print("EILSEQ");
+                    assert(false);
+                }
+                // .print(itoa(c));
+                if (c == 0) continue;
+                if (c > 127) available = 0; // assume utf-8 and all was consumed (?)
+                else available -= 1; // assume we're reading a multi-char input like ESC sequence
+                return c;
+            }
+        }
         while (running) {
-            update;
-            // I could use select here
-            // but then again fuck select tho
-            // horrible platform dependent piece of mess
-            int data;
-            ioctl(0, FIONREAD, &data);
-            if (data == 0) {
-                timespec tenms = timespec(0, 10000000);
-                nanosleep(&tenms, null);
-                continue;
-            }
-            int c = getwchar;
-            if (c == -1 && cxruntime_errno() == 84) {
-                print("EILSEQ");
-                assert(false);
-            }
-            // .print(itoa(c));
-            if (c == 0) continue;
+            int c = waitwchar(:update);
             if (c == 10) {
-                enter();
-                inputLine = "";
+                widget.input((:specialKey, SpecialKey.Enter));
                 continue;
             }
-            if ((c == 127 || c == 8) && inputLine.length > 0) {
-                inputLine = inputLine.utf8RemoveLastCode;
+            if (c == 27) {
+                if (available == 0) {
+                    widget.input((:specialKey, SpecialKey.Escape));
+                    continue;
+                }
+                if (cast(char) waitwchar(:none) == "["[0]) {
+                    // ansi sequence
+                    // if you type alt-[, this loop is where the program will hang.
+                    mut string ansi;
+                    while (true) {
+                        char ch = cast(char) waitwchar(:none);
+                        if (ch == "~"[0]) break;
+                        ansi ~= ch;
+                        // xterm
+                        if (ansi.length == 1 && [any ch == ansi[0] for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"]) {
+                            break;
+                        }
+                        if (ansi == "1P" || ansi == "1Q" || ansi == "1R" || ansi == "1S") {
+                            break;
+                        }
+                    }
+                    if (ansi == "11" || ansi == "1P") widget.input((:specialKey, SpecialKey.F1));
+                    else if (ansi == "12" || ansi == "1Q") widget.input((:specialKey, SpecialKey.F2));
+                    else if (ansi == "13" || ansi == "1R") widget.input((:specialKey, SpecialKey.F3));
+                    else if (ansi == "14" || ansi == "1S") widget.input((:specialKey, SpecialKey.F4));
+                    else if (ansi == "15") widget.input((:specialKey, SpecialKey.F5));
+                    else if (ansi == "17") widget.input((:specialKey, SpecialKey.F6));
+                    else if (ansi == "18") widget.input((:specialKey, SpecialKey.F7));
+                    else if (ansi == "19") widget.input((:specialKey, SpecialKey.F8));
+                    else if (ansi == "20") widget.input((:specialKey, SpecialKey.F9));
+                    else if (ansi == "21") widget.input((:specialKey, SpecialKey.F10));
+                    else if (ansi == "23") widget.input((:specialKey, SpecialKey.F11));
+                    else if (ansi == "24") widget.input((:specialKey, SpecialKey.F12));
+                    else if (ansi == "A") widget.input((:specialKey, SpecialKey.Up));
+                    else if (ansi == "B") widget.input((:specialKey, SpecialKey.Down));
+                    else if (ansi == "C") widget.input((:specialKey, SpecialKey.Right));
+                    else if (ansi == "D") widget.input((:specialKey, SpecialKey.Left));
+                    continue;
+                }
+            }
+            if (c == 127 || c == 8) {
+                widget.input((:specialKey, SpecialKey.Backspace));
                 continue;
             }
             if (!iscntrl(c)) {
                 auto buffer = new char[](16);
                 int len = wctomb(buffer.ptr, c);
-                inputLine ~= buffer[0 .. len];
+                widget.input((:key, buffer[0 .. len]));
             }
         }
         disableRawMode;
@@ -194,15 +264,23 @@ final class View
     // relative to viewmask
     int row, col;
 
-    // print state, todo factor out into renderer?
+    // print state
     Color fg_, bg_;
 
+    // TODO decouple viewmask from rows/cols so we can have windows half-hidden behind surrounding decoration
     ((int row, int col) from, (int row, int col) to) viewmask;
 
     this(this.target, int from_row, int from_col, int to_row, int to_col) {
         this.viewmask = ((from_row, from_col), (to_row, to_col));
         this.fg_ = Color.lwhite;
         this.bg_ = Color.black;
+    }
+
+    View like(int from_row, int from_col, int to_row, int to_col) {
+        auto view = new View(this.target, from_row, from_col, to_row, to_col);
+        view.fg_ = this.fg_;
+        view.bg_ = this.bg_;
+        return view;
     }
 
     int rows() { return viewmask.to.row - viewmask.from.row; }
@@ -284,10 +362,16 @@ final class View
     }
 
     View shrink(int top_rows, int left_cols, int bottom_rows, int right_cols) {
-        return new View(
-            this.target,
+        return this.like(
             viewmask.from.row + top_rows, viewmask.from.col + left_cols,
             viewmask.to.row - bottom_rows, viewmask.to.col - right_cols);
+    }
+
+    View select(int from_row, int from_col, int to_row, int to_col) {
+        // TODO crop viewmask with own mask
+        return this.like(
+            viewmask.from.row + from_row, viewmask.from.col + from_col,
+            viewmask.from.row + to_row, viewmask.from.col + to_col);
     }
 
     View fillRow() {

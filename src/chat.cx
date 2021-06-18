@@ -2,10 +2,14 @@ module chat;
 
 macro import cx.macros.assert;
 macro import cx.macros.cimport;
+macro import cx.macros.listcomprehension;
 
 import c_header("ctype.h");
+import c_header("locale.h");
+import c_header("stdlib.h");
 import c_header("string.h");
 import c_header("unistd.h");
+import c_header("wchar.h");
 
 import helpers : itoa, print;
 import std.string;
@@ -15,65 +19,366 @@ import terminal;
 import time;
 import utf;
 
-void main() {
-    print("Starting.");
+struct MenuEntry
+{
+    string name;
+    void delegate() action;
+}
 
-    /*Buffer render_(int rows, int cols) {
-        return new Buffer(rows, cols);
+struct SubMenu
+{
+    string name;
+    (MenuEntry[] | void delegate()) content;
+
+    MenuEntry[] subEntries() {
+        content.case {
+            void delegate(): { assert(false); }
+            MenuEntry[] subEntries: return subEntries;
+        }
     }
-    void enter_() { }
-    auto term = new Terminal(&render_, &enter_);
-    term.enableRawMode;
-    keyDebugLoop;
-    term.disableRawMode;
-    return;*/
+}
 
-    string channel = "##test";
-    auto irc = new IRC;
+class MenuBar : Widget
+{
+    Application app;
 
-    irc.connect("irc.libera.chat", 6667);
-    irc.sendln("NICK test_cx");
-    irc.sendln("USER test_cx * * :test_cx");
+    SubMenu[] entries;
 
-    while (!irc.ready) {
-        irc.pump;
-    }
-    irc.sendln("JOIN " ~ channel);
+    int xsel, ysel;
+    bool open;
 
-    mut Terminal term;
+    this(this.app, this.entries) { }
 
-    Buffer refresh(int rows, int cols) {
-        irc.pump;
-
-        // print("render(" ~ rows.itoa ~ ", " ~ cols.itoa ~ ")");
-        auto buf = new Buffer(rows, cols);
-        mut auto view = buf.view;
-
-        view.clear(Color.blue);
-
+    override void render(View view, bool focus) {
         // title line
         view.go(0, 0);
-        view.bg(Color.grey).fg(Color.red).print("  H");
-        view.fg(Color.black).print("ell World");
-        view.fillRow;
-        view = view.shrink(top_rows=1, 0, 0, 0);
+        view.print(" ");
+        for (int i <- 0 .. entries.length) {
+            bool entrySelected = focus && i == xsel;
+            auto entry = entries[i];
+            view.bg(Color.grey).print("  ");
+            if (entrySelected) {
+                int startCol = view.col;
+                view.bg(Color.black);
+                view.fg(Color.red).print(entry.name[0 .. 1]);
+                view.fg(Color.grey).print(entry.name[1 .. $]);
+                if (open) {
+                    auto subentries = entry.subEntries;
+                    int maxlen = [max cast(int) e.name.length for e in subentries base 10];
+                    mut auto submenu = view.select(
+                        view.row + 1,
+                        startCol,
+                        view.row + cast(int) subentries.length + 3,
+                        startCol + maxlen + 4
+                    );
+                    submenu.fg(Color.black).clear(Color.grey).printPrettyBox;
+                    submenu = submenu.shrink(1, 1, 1, 1);
+                    for (int j <- 0 .. subentries.length) {
+                        auto subentry = subentries[j];
+                        bool subSelected = focus && j == ysel;
+                        submenu.go(j, 0).bg(Color.grey).print(" ");
+                        if (subSelected) {
+                            submenu.bg(Color.black);
+                            submenu.fg(Color.red).print(subentry.name[0 .. 1]);
+                            submenu.fg(Color.grey).print(subentry.name[1 .. $]);
+                        } else {
+                            submenu.fg(Color.red).print(subentry.name[0 .. 1]);
+                            submenu.fg(Color.black).print(subentry.name[1 .. $]);
+                        }
+                    }
+                }
+            } else {
+                view.bg(Color.grey);
+                view.fg(Color.red).print(entry.name[0 .. 1]);
+                view.fg(Color.black).print(entry.name[1 .. $]);
+            }
+        }
+        view.bg(Color.grey).fillRow;
+    }
 
-        // status line
+    void menuRight() {
+        int xlen = cast(int) entries.length;
+        xsel = (xsel + 1) % xlen;
+        if (!open) return;
+        fixOpenMenu;
+    }
+
+    void menuLeft() {
+        int xlen = cast(int) entries.length;
+        xsel = (xsel - 1 + xlen) % xlen;
+        if (!open) return;
+        fixOpenMenu;
+    }
+
+    void menuDown() {
+        assert(open);
+        int ylen = cast(int) entries[xsel].subEntries.length;
+        ysel = (ysel + 1) % ylen;
+    }
+
+    void menuUp() {
+        assert(open);
+        int ylen = cast(int) entries[xsel].subEntries.length;
+        ysel = (ysel - 1 + ylen) % ylen;
+    }
+
+    void menuOpen() {
+        entries[xsel].content.case {
+            void delegate() action: { }
+            MenuEntry[] subentries: open = true;
+        }
+    }
+
+    void menuActivate() {
+        void do_(void delegate() action) {
+            // defocus the menu at any rate, even if the entry takes focus
+            this.app.focusMain;
+            open = false;
+            action();
+        }
+        entries[xsel].content.case {
+            void delegate() action: {
+                assert(!open);
+                do_(action);
+            }
+            MenuEntry[] subentries: {
+                if (!open) open = true;
+                else do_(subentries[ysel].action);
+            }
+        }
+    }
+
+    void fixOpenMenu() {
+        entries[xsel].content.case {
+            void delegate(): { open = false; }
+            MenuEntry[] subentries: {
+                if (ysel >= subentries.length)
+                    ysel = cast(int) subentries.length - 1;
+            }
+        }
+    }
+
+    override void input(InputEvent event) {
+        event.case {
+            (:specialKey, SpecialKey key): {
+                if (key == SpecialKey.Escape) { open = false; this.app.focusMain; }
+                if (key == SpecialKey.Right) menuRight;
+                if (key == SpecialKey.Left) menuLeft;
+                if (key == SpecialKey.Down) {
+                    if (!open) menuOpen;
+                    else menuDown;
+                }
+                if (key == SpecialKey.Up) {
+                    if (!open) menuOpen;
+                    if (open) menuUp;
+                }
+                if (key == SpecialKey.Enter) {
+                    menuActivate;
+                }
+            }
+            (:key, string key): { }
+        }
+    }
+}
+
+class Window : Widget
+{
+    string title;
+
+    int rows, cols;
+
+    Widget body_;
+
+    this(this.title, this.rows, this.cols, this.body_) {}
+
+    override void render(View view, bool focus) {
+        mut auto subview = view.select(
+            view.rows / 2 - rows / 2, view.cols / 2 - cols / 2,
+            view.rows / 2 + rows / 2, view.cols / 2 + cols / 2);
+        subview.bg(Color.grey).fg(Color.black).printPrettyBox;
+        subview.go(0, subview.cols / 2 - cast(int) title.length / 2 - 2);
+        subview.print("┤ ").fg(Color.white).print(title).fg(Color.black).print(" ├");
+
+        subview = subview.shrink(1, 1, 1, 1);
+        subview.clear(Color.grey);
+        body_.render(subview, focus);
+    }
+
+    override void input(InputEvent event) {
+        body_.input(event);
+    }
+}
+
+struct ListEntry
+{
+    string label;
+    Widget widget;
+}
+
+class ListDialog : Widget
+{
+    ListEntry[] entries;
+
+    (int | :cancel | :ok) position;
+
+    this(this.entries) { position = 0; }
+
+    void ok() { }
+    void cancel() { }
+
+    override void render(View view, bool focus) {
+        mut View view = view.shrink(1, 1, 0, 1); // margin
+        mut int row = 0;
+        int labels = [max cast(int) entry.label.length for entry in entries] + 2;
+        for (int i <- 0 .. entries.length) {
+            bool focused = position.case((:cancel): false, (:ok): false, int j: j == i);
+            auto entry = entries[i];
+            // give it the whole view in case it wants to render say a dropdown
+            // (we don't have dropdowns. but we COULD)
+            if (i > 0) view = view.shrink(2, 0, 0, 0);
+            view.print(entry.label);
+            auto subview = view.shrink(0, labels, 0, 0);
+            if (focused) subview.bg(Color.blue).fg(Color.lwhite);
+            entry.widget.render(subview, focused);
+        }
+        view.select(view.rows - 1, 0, view.rows, view.cols)
+            .print("whatever [ok] [cancel] fuck off");
+    }
+
+    void nextPosition() { }
+    void prevPosition() { }
+
+    override void input(InputEvent event) {
+        event.case {
+            (:specialKey, SpecialKey key): {
+                if (key == SpecialKey.Escape) {
+                    cancel();
+                    return;
+                }
+                else if (key == SpecialKey.Enter) {
+                    position.case {
+                        (:cancel): { cancel(); return; }
+                        (:ok): { ok(); return; }
+                        int offset: {}
+                    }
+                }
+                else if (key == SpecialKey.Down) { nextPosition; return; }
+                else if (key == SpecialKey.Up) { prevPosition; return; }
+            }
+            (:key, string text): { }
+        }
+        position.case {
+            (:cancel): { }
+            (:ok): { }
+            int offset: {
+                entries[offset].widget.input(event);
+            }
+        }
+    }
+}
+
+class InputField : Widget
+{
+    string line;
+
+    this() { }
+
+    override void render(View view, bool focus) {
+        view.go(0, 0).print("[ ").print(line).printRight(" ]");
+    }
+
+    override void input(InputEvent event) {
+        event.case {
+            (:specialKey, SpecialKey key): {
+                if (key == SpecialKey.Backspace) {
+                    if (line.length > 0) {
+                        line = line.utf8RemoveLastCode;
+                    }
+                }
+            }
+            (:key, string text): {
+                line ~= text;
+            }
+        }
+    }
+}
+
+class StatusBar : Widget {
+    this() { }
+    override void render(View view, bool focus) {
         view.go(-1, 0).bg(Color.grey).fg(Color.black);
-        view.print(" Welcome to TUI IRC Demo");
+        view.print(" chat.com - Press F9 for Menu.");
         view.printRight("[ " ~ Time.now.local ~ " ] ");
-        view = view.shrink(0, 0, bottom_rows=1, 0);
+    }
+    override void input(InputEvent event) {
+        assert(false);
+    }
+}
+
+class Application
+{
+    IRC irc;
+
+    Terminal term;
+
+    MainScreen ui;
+
+    this(this.irc, string channel) {
+        mut SubMenu[] menu;
+        void help() { }
+        void exit() { this.exit; }
+        menu ~= SubMenu("Application", [
+            MenuEntry("Connect...", &exit),
+            MenuEntry("Reconnect", &exit)
+            MenuEntry("Join...", &exit)
+            MenuEntry("Quit", &exit)
+        ]);
+        menu ~= SubMenu("Help", &help);
+        auto menu = new MenuBar(this, menu);
+        auto chat = new ChatWidget(this, channel);
+        this.ui = new MainScreen(menu, new StatusBar, chat);
+    }
+
+    void focusMain() {
+        this.ui.focus = :mainOrPopup;
+    }
+
+    void focusMenu() {
+        this.ui.focus = :menuBar;
+    }
+
+    void exit() {
+        this.term.running = false;
+    }
+}
+
+class ChatWidget : Widget
+{
+    Application app;
+
+    string channel;
+
+    // Not rendered.
+    InputField inputField;
+
+    this(this.app, this.channel) { this.inputField = new InputField; }
+
+    override void render(View view, bool focus) {
+        mut View view = view;
+        auto irc = app.irc;
+        // TODO master list of connections to refresh?
+        // irc.pump;
 
         // chat box
-        view.fg(Color.lwhite).bg(Color.blue).printPrettyBox(0, 0, view.rows - 1, view.cols - 1);
+        view.fg(Color.lwhite).bg(Color.blue).printPrettyBox;
 
         // input line
         view.go(-1, 2);
         view.bg(Color.blue).fg(Color.lwhite);
-        view.print("╡");
-        view.bg(Color.blue).printRight("╞══╝");
+        view.print("┤");
+        view.bg(Color.blue).printRight("├──┘");
         view.fg(Color.lyellow);
-        view.go(-1, 3).print(" ").print(term.inputLine);
+        view.go(-1, 3).print(" ").print(inputField.line);
 
         view = view.shrink(1, 1, 1, 1);
 
@@ -108,8 +413,6 @@ void main() {
         for (auto msg <- irc.messages[firstMessage .. $]) {
             string[] msgLines = msg.splitLines;
             for (mut int i = 0; i < msgLines.length; i += 1) {
-                // skip occluded lines
-                // TODO masking
                 view.go(paneRow, 0);
                 if (i == 0) {
                     view.bg(Color.blue).fg(Color.black).print(" [" ~ msg.time.local ~ "]");
@@ -123,45 +426,130 @@ void main() {
                 view.fg(Color.lwhite).print(msgLines[i]);
             }
         }
-        return buf;
-    }
-    void enter() {
-        string line = term.inputLine;
-
-        if (line == "/q" || line == "/quit") {
-            irc.sendln("QUIT");
-            term.running = false;
-            return;
-        }
-        if (line.startsWith("/me ")) {
-            string action = line[4 .. $];
-            irc.messages ~= Message(Time.now, "feep[cx]", "* feep[cx] " ~ action);
-            irc.sendln("PRIVMSG " ~ channel ~ " :\x01ACTION " ~ action ~ "\x01");
-            return;
-        }
-        irc.messages ~= Message(Time.now, "feep[cx]", line);
-        irc.sendln("PRIVMSG " ~ channel ~ " :" ~ line);
     }
 
-    term = new Terminal(&refresh, &enter);
+    override void input(InputEvent event) {
+        event.case {
+            (:specialKey, SpecialKey key): {
+                if (key == SpecialKey.Enter) {
+                    string line = inputField.line;
+                    inputField.line = "";
+
+                    if (line == "/q" || line == "/quit") {
+                        app.irc.sendln("QUIT");
+
+                        app.term.running = false;
+                        return;
+                    }
+                    if (line.startsWith("/me ")) {
+                        string action = line[4 .. $];
+                        app.irc.messages ~= Message(Time.now, "feep[cx]", "* feep[cx] " ~ action);
+                        app.irc.sendln("PRIVMSG " ~ channel ~ " :\x01ACTION " ~ action ~ "\x01");
+                        return;
+                    }
+                    app.irc.messages ~= Message(Time.now, "feep[cx]", line);
+                    app.irc.sendln("PRIVMSG " ~ channel ~ " :" ~ line);
+                    return;
+                }
+                if (key == SpecialKey.F9) {
+                    app.focusMenu;
+                    return;
+                }
+            }
+            (:key, string text): { }
+        }
+        inputField.input(event);
+    }
+}
+
+class MainScreen : Widget
+{
+    Widget menuBar;
+
+    Widget statusBar;
+
+    Widget mainView;
+
+    Widget[] popupStack;
+
+    (:menuBar | :mainOrPopup) focus;
+
+    this(this.menuBar, this.statusBar, this.mainView) {
+        this.focus = :mainOrPopup;
+    }
+
+    bool menuBarHasFocus() { return focus.case((:menuBar): true, (:mainOrPopup): false); }
+    bool mainPopupHasFocus() { return focus.case((:menuBar): false, (:mainOrPopup): true); }
+
+    override void render(View view, bool focus) {
+        assert(focus); // as opposed to what
+
+        mainView.render(view.shrink(top_rows=1, 0, bottom_rows=1, 0), mainPopupHasFocus && !popupStack.length);
+        statusBar.render(view.shrink(top_rows=view.rows - 1, 0, 0, 0), false);
+        menuBar.render(view, menuBarHasFocus); // can paint over main view, for menus
+        if (!popupStack.length) return;
+        // render bottom to top
+        for (auto widget <- popupStack[0 .. $ - 1])
+            widget.render(view, false);
+        popupStack[$ - 1].render(view, true);
+    }
+
+    override void input(InputEvent event) {
+        if (menuBarHasFocus)
+            return menuBar.input(event);
+        if (!popupStack.length)
+            return mainView.input(event);
+        popupStack[$ - 1].input(event);
+    }
+}
+
+void main() {
+    print("Starting.");
+
+    /*auto term = new Terminal(new StatusBar);
+    setlocale(__LC_ALL, "".toStringz);
+    term.enableRawMode;
+    keyDebugLoop;
+    term.disableRawMode;
+    return;*/
+
+    string channel = "#lesswrong";
+    auto irc = new IRC;
+
+    /*irc.connect("irc.libera.chat", 6667);
+    irc.sendln("NICK feep[cx]");
+    irc.sendln("USER feep[cx] * * :feep's cx TUI client");
+
+    while (!irc.ready) {
+        irc.pump;
+    }
+    irc.sendln("JOIN " ~ channel);*/
+
+    auto app = new Application(irc, channel);
+    auto term = new Terminal(app.ui);
+    app.term = term;
+
+    app.ui.popupStack ~= new Window("Select Nickname", 10, 40, new ListDialog([
+        ListEntry("Name", new InputField)]));
+
     term.updateLoop;
 }
 
-void printPrettyBox(View view, int r0, int c0, int r1, int c1) {
-    view.go(r0, c0).print("╔");
-    for (int i <- 0 .. c1 - c0 - 1) {
-        view.print("═");
+void printPrettyBox(View view) {
+    view.go(0, 0).print("┌");
+    for (int i <- 0 .. view.cols - 2) {
+        view.print("─");
     }
-    view.print("╗");
-    for (int i <- r0 + 1 .. r1) {
-        view.go(i, c0).print("║");
-        view.go(i, c1).print("║");
+    view.print("┐");
+    for (int i <- 1 .. view.rows) {
+        view.go(i, 0).print("│");
+        view.go(i, -1).print("│");
     }
-    view.go(r1, c0).print("╚");
-    for (int i <- 0 .. c1 - c0 - 1) {
-        view.print("═");
+    view.go(-1, 0).print("└");
+    for (int i <- 0 .. view.cols - 2) {
+        view.print("─");
     }
-    view.print("╝");
+    view.print("┘");
 }
 
 // Amount of tiles needed to render the text
@@ -184,15 +572,20 @@ string takeTiles(string text, int length) {
 }
 
 void keyDebugLoop() {
-    mut char c;
-    while (c != "q"[0]) {
-        c = 0;
-        read(STDIN_FILENO, &c, 1);
-        if (c == cast(char) 0) continue;
+    mut int c;
+    while (cast(char) c != "q"[0]) {
+        c = getwchar;
+        if (c == -1 && cxruntime_errno() == 84) {
+            print("EILSEQ");
+            assert(false);
+        }
+        if (c == 0) continue;
         if (iscntrl(c)) {
             print(itoa(c));
         } else {
-            print(itoa(c) ~ " (" ~ c ~ ")");
+            auto buffer = new char[](16);
+            int len = wctomb(buffer.ptr, c);
+            print(itoa(c) ~ " (" ~ buffer[0 .. len] ~ ")");
         }
     }
 }
