@@ -44,6 +44,11 @@ class Widget
     void input(InputEvent event) { }
 }
 
+abstract class Activity
+{
+    abstract void update() { }
+}
+
 class Terminal
 {
     termios original;
@@ -67,35 +72,39 @@ class Terminal
         this.running = true;
     }
 
-    void update() {
+    void update(Activity activity) {
         auto sz = getSize;
         auto newbuf = new Buffer(sz.rows, sz.cols);
         auto view = newbuf.view;
 
         view.clear(Color.blue);
+        activity.update;
         widget.render(view, true);
         paint(newbuf);
     }
 
-    void updateLoop() {
+    void updateLoop(Activity activity) {
         setlocale(__LC_ALL, "".toStringz);
         enableRawMode;
         mut int available = 0;
         int waitwchar((:update|:none) doUpdate) {
             while (running) {
-                doUpdate.case {
-                    (:update): update;
-                    (:none): { }
-                }
-                if (available == 0) {
-                    int data;
-                    ioctl(0, FIONREAD, &data);
-                    if (data == 0) {
-                        timespec sleep = timespec(0, 100000000);
-                        nanosleep(&sleep, null);
-                        continue;
+                while (available == 0) {
+                    doUpdate.case {
+                        (:update): update(activity);
+                        (:none): { }
                     }
-                    available = data;
+                    for (mut int i = 0; i < 10; i += 1) {
+                        int data;
+                        ioctl(0, FIONREAD, &data);
+                        if (data == 0) {
+                            timespec sleep = timespec(0, 10000000);
+                            nanosleep(&sleep, null);
+                            continue;
+                        }
+                        available = data;
+                        break;
+                    }
                 }
                 int c = getwchar;
                 if (c == -1 && cxruntime_errno() == 84) {
@@ -159,7 +168,7 @@ class Terminal
                 widget.input((:specialKey, SpecialKey.Backspace));
                 continue;
             }
-            if (!iscntrl(c)) {
+            if (c == 9 || !iscntrl(c)) {
                 auto buffer = new char[](16);
                 int len = wctomb(buffer.ptr, c);
                 widget.input((:key, buffer[0 .. len]));

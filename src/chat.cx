@@ -197,7 +197,10 @@ class Window : Widget
             view.rows / 2 + rows / 2, view.cols / 2 + cols / 2);
         subview.bg(Color.grey).fg(Color.black).printPrettyBox;
         subview.go(0, subview.cols / 2 - cast(int) title.length / 2 - 2);
-        subview.print("┤ ").fg(Color.white).print(title).fg(Color.black).print(" ├");
+        subview.print("┤ ");
+        if (focus) subview.fg(Color.lwhite);
+        else subview.fg(Color.white);
+        subview.print(title).fg(Color.black).print(" ├");
 
         subview = subview.shrink(1, 1, 1, 1);
         subview.clear(Color.grey);
@@ -235,18 +238,45 @@ class ListDialog : Widget
             auto entry = entries[i];
             // give it the whole view in case it wants to render say a dropdown
             // (we don't have dropdowns. but we COULD)
-            if (i > 0) view = view.shrink(2, 0, 0, 0);
+            if (i > 0) view = view.shrink(1, 0, 0, 0);
             view.print(entry.label);
             auto subview = view.shrink(0, labels, 0, 0);
             if (focused) subview.bg(Color.blue).fg(Color.lwhite);
             entry.widget.render(subview, focused);
         }
-        view.select(view.rows - 1, 0, view.rows, view.cols)
-            .print("whatever [ok] [cancel] fuck off");
+        auto bottomRow = view.select(view.rows - 1, 0, view.rows, view.cols);
+        bool cancelFocused = position.case((:cancel): true, (:ok): false, int: false);
+        bool okFocused = position.case((:cancel): false, (:ok): true, int: false);
+        if (cancelFocused) bottomRow.bg(Color.blue).fg(Color.lwhite);
+        else bottomRow.bg(Color.grey).fg(Color.black);
+        bottomRow.go(0, 2).print("< Cancel >");
+        if (okFocused) bottomRow.bg(Color.blue).fg(Color.lwhite);
+        else bottomRow.bg(Color.grey).fg(Color.black);
+        bottomRow.go(0, -8).print("< OK >");
     }
 
-    void nextPosition() { }
-    void prevPosition() { }
+    void nextPosition() {
+        (int | :cancel) nextOffset(int offset) {
+            int result = offset + 1;
+            if (result < entries.length) return result;
+            else return :cancel;
+        }
+        position = position.case(
+            (:cancel): :ok,
+            (:ok): nextOffset(-1),
+            int offset: nextOffset(offset));
+    }
+    void prevPosition() {
+        (int | :ok) prevOffset(int offset) {
+            int result = offset - 1;
+            if (result >= 0) return result;
+            else return :ok;
+        }
+        position = position.case(
+            (:cancel): prevOffset(cast(int) entries.length),
+            (:ok): :cancel,
+            int offset: prevOffset(offset));
+    }
 
     override void input(InputEvent event) {
         event.case {
@@ -259,13 +289,18 @@ class ListDialog : Widget
                     position.case {
                         (:cancel): { cancel(); return; }
                         (:ok): { ok(); return; }
-                        int offset: {}
+                        int offset: { ok(); return; }
                     }
                 }
                 else if (key == SpecialKey.Down) { nextPosition; return; }
                 else if (key == SpecialKey.Up) { prevPosition; return; }
             }
-            (:key, string text): { }
+            (:key, string text): {
+                if (text == "\t") {
+                    nextPosition;
+                    return;
+                }
+            }
         }
         position.case {
             (:cancel): { }
@@ -315,28 +350,34 @@ class StatusBar : Widget {
     }
 }
 
-class Application
+class Application : Activity
 {
     IRC irc;
 
     Terminal term;
 
-    MainScreen ui;
+    UserInterface ui;
 
-    this(this.irc, string channel) {
+    bool connected;
+    string nick, channel;
+
+    override void update() {
+        if (irc.ready) irc.pump;
+    }
+
+    this(this.irc) {
         mut SubMenu[] menu;
         void help() { }
-        void exit() { this.exit; }
         menu ~= SubMenu("Application", [
-            MenuEntry("Connect...", &exit),
-            MenuEntry("Reconnect", &exit)
-            MenuEntry("Join...", &exit)
+            MenuEntry("Connect...", &connectDlg),
+            // MenuEntry("Reconnect", &exit),
+            // MenuEntry("Join...", &exit),
             MenuEntry("Quit", &exit)
         ]);
         menu ~= SubMenu("Help", &help);
         auto menu = new MenuBar(this, menu);
-        auto chat = new ChatWidget(this, channel);
-        this.ui = new MainScreen(menu, new StatusBar, chat);
+        auto chat = new ChatWidget(this);
+        this.ui = new UserInterface(menu, new StatusBar, chat);
     }
 
     void focusMain() {
@@ -345,6 +386,10 @@ class Application
 
     void focusMenu() {
         this.ui.focus = :menuBar;
+    }
+
+    void connectDlg() {
+        this.ui.popupStack ~= new Window("Connect to Server", 10, 50, new ConnectDialog(this));
     }
 
     void exit() {
@@ -361,13 +406,12 @@ class ChatWidget : Widget
     // Not rendered.
     InputField inputField;
 
-    this(this.app, this.channel) { this.inputField = new InputField; }
+    this(this.app) { this.inputField = new InputField; }
 
     override void render(View view, bool focus) {
         mut View view = view;
         auto irc = app.irc;
         // TODO master list of connections to refresh?
-        // irc.pump;
 
         // chat box
         view.fg(Color.lwhite).bg(Color.blue).printPrettyBox;
@@ -432,23 +476,30 @@ class ChatWidget : Widget
         event.case {
             (:specialKey, SpecialKey key): {
                 if (key == SpecialKey.Enter) {
+                    // TODO IRC session engine class
                     string line = inputField.line;
                     inputField.line = "";
 
                     if (line == "/q" || line == "/quit") {
-                        app.irc.sendln("QUIT");
+                        if (app.connected) app.irc.sendln("QUIT");
 
                         app.term.running = false;
                         return;
                     }
+                    string channel = app.channel;
+                    string nick = app.nick;
                     if (line.startsWith("/me ")) {
                         string action = line[4 .. $];
-                        app.irc.messages ~= Message(Time.now, "feep[cx]", "* feep[cx] " ~ action);
-                        app.irc.sendln("PRIVMSG " ~ channel ~ " :\x01ACTION " ~ action ~ "\x01");
+                        if (app.connected) {
+                            app.irc.messages ~= Message(Time.now, nick, "* " ~ nick ~ " " ~ action);
+                            app.irc.sendln("PRIVMSG " ~ channel ~ " :\x01ACTION " ~ action ~ "\x01");
+                        }
                         return;
                     }
-                    app.irc.messages ~= Message(Time.now, "feep[cx]", line);
-                    app.irc.sendln("PRIVMSG " ~ channel ~ " :" ~ line);
+                    if (app.connected) {
+                        app.irc.messages ~= Message(Time.now, nick, line);
+                        app.irc.sendln("PRIVMSG " ~ channel ~ " :" ~ line);
+                    }
                     return;
                 }
                 if (key == SpecialKey.F9) {
@@ -462,7 +513,7 @@ class ChatWidget : Widget
     }
 }
 
-class MainScreen : Widget
+class UserInterface : Widget
 {
     Widget menuBar;
 
@@ -480,6 +531,25 @@ class MainScreen : Widget
 
     bool menuBarHasFocus() { return focus.case((:menuBar): true, (:mainOrPopup): false); }
     bool mainPopupHasFocus() { return focus.case((:menuBar): false, (:mainOrPopup): true); }
+
+    void removePopup(Widget widget) {
+        // remove widget, move other widgets back to match, then shorten stack
+        mut int removing = 0;
+        for (int i <- 0 .. popupStack.length) {
+            if (popupStack[i] is widget) {
+                removing += 1;
+            }
+            else if (auto wnd = popupStack[i].instanceOf(Window)) {
+                if (wnd.body_ is widget) {
+                    removing += 1;
+                }
+            }
+            if (i + removing >= popupStack.length)
+                break;
+            popupStack[i] = popupStack[i + removing];
+        }
+        popupStack = popupStack[0 .. $ - removing];
+    }
 
     override void render(View view, bool focus) {
         assert(focus); // as opposed to what
@@ -499,7 +569,51 @@ class MainScreen : Widget
             return menuBar.input(event);
         if (!popupStack.length)
             return mainView.input(event);
-        popupStack[$ - 1].input(event);
+        auto lastPopup = popupStack[$ - 1];
+        lastPopup.input(event);
+    }
+}
+
+class ConnectDialog : ListDialog {
+    Application app;
+    InputField server;
+    InputField channel;
+    InputField nick;
+    this(this.app) {
+        server = new InputField;
+        server.line = "irc.libera.chat:6667";
+        channel = new InputField;
+        channel.line = "#lesswrong";
+        nick = new InputField;
+        nick.line = "feep[cx]";
+        this.entries = [
+            ListEntry("Server", server),
+            ListEntry("Channel", channel),
+            ListEntry("Nickname", nick)];
+        position = 0;
+    }
+    override void cancel() {
+        this.app.ui.removePopup(this);
+    }
+    override void ok() {
+        import std.string : atoi;
+
+        this.app.ui.removePopup(this);
+        string host = server.line.split(":")[0];
+        this.app.nick = nick.line;
+        this.app.channel = channel.line;
+        int port = server.line.split(":")[1].atoi;
+        with (this.app.irc) {
+            connect(host, port);
+            string line = nick.line;
+            sendln("NICK " ~ line);
+            sendln("USER " ~ line ~ " * * :feep's cx TUI client");
+            while (!ready) {
+                pump;
+            }
+            sendln("JOIN " ~ channel.line);
+        }
+        this.app.connected = true;
     }
 }
 
@@ -513,26 +627,12 @@ void main() {
     term.disableRawMode;
     return;*/
 
-    string channel = "#lesswrong";
     auto irc = new IRC;
-
-    /*irc.connect("irc.libera.chat", 6667);
-    irc.sendln("NICK feep[cx]");
-    irc.sendln("USER feep[cx] * * :feep's cx TUI client");
-
-    while (!irc.ready) {
-        irc.pump;
-    }
-    irc.sendln("JOIN " ~ channel);*/
-
-    auto app = new Application(irc, channel);
+    auto app = new Application(irc);
     auto term = new Terminal(app.ui);
     app.term = term;
 
-    app.ui.popupStack ~= new Window("Select Nickname", 10, 40, new ListDialog([
-        ListEntry("Name", new InputField)]));
-
-    term.updateLoop;
+    term.updateLoop(app);
 }
 
 void printPrettyBox(View view) {
