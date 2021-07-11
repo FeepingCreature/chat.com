@@ -1,8 +1,8 @@
 module terminal;
 
-macro import cx.macros.assert;
-macro import cx.macros.cimport;
-macro import cx.macros.listcomprehension;
+macro import neat.macros.assert;
+macro import neat.macros.cimport;
+macro import neat.macros.listcomprehension;
 
 import c_header("ctype.h");
 import c_header("locale.h");
@@ -17,7 +17,7 @@ import helpers : itoa;
 
 import utf;
 
-extern(C) int cxruntime_errno();
+extern(C) int neat_runtime_errno();
 
 // TODO fix C import
 struct timespec {
@@ -107,7 +107,7 @@ class Terminal
                     }
                 }
                 int c = getwchar;
-                if (c == -1 && cxruntime_errno() == 84) {
+                if (c == -1 && neat_runtime_errno() == 84) {
                     print("EILSEQ");
                     assert(false);
                 }

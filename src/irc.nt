@@ -1,7 +1,7 @@
 module irc;
 
-macro import cx.macros.assert;
-macro import cx.macros.cimport;
+macro import neat.macros.assert;
+macro import neat.macros.cimport;
 
 import c_header("sys/errno.h");
 import c_header("sys/socket.h");
@@ -90,7 +90,7 @@ class IRC
         while (true) {
             auto buf = new char[](1024);
             int ret = cast(int) recv(this.sock, buf.ptr, cast(int) buf.length, /*MSG_DONTWAIT*/0x40);
-            if (ret == -1 && (cxruntime_errno() == EAGAIN/* || cxruntime_errno() == EWOULDBLOCK*/))
+            if (ret == -1 && (neat_runtime_errno() == EAGAIN/* || neat_runtime_errno() == EWOULDBLOCK*/))
                 return;
             assert(ret > 0);
             this.partialLineBuf ~= buf[0 .. ret];
@@ -108,4 +108,4 @@ string user(string mask) {
     return mask;
 }
 
-extern(C) int cxruntime_errno();
+extern(C) int neat_runtime_errno();

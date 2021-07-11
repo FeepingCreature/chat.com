@@ -1,7 +1,7 @@
 module socket;
 
-macro import cx.macros.assert;
-macro import cx.macros.cimport;
+macro import neat.macros.assert;
+macro import neat.macros.cimport;
 
 import c_header("netdb.h");
 

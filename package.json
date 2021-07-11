@@ -1,0 +1,10 @@
+{
+    "source": "src",
+    "type": "binary",
+    "binary": "chat",
+    "main": "src/chat.nt",
+    "dependencies": {
+    },
+    "sources": {
+    }
+}

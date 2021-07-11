@@ -1,8 +1,8 @@
 module chat;
 
-macro import cx.macros.assert;
-macro import cx.macros.cimport;
-macro import cx.macros.listcomprehension;
+macro import neat.macros.assert;
+macro import neat.macros.cimport;
+macro import neat.macros.listcomprehension;
 
 import c_header("ctype.h");
 import c_header("locale.h");
@@ -675,7 +675,7 @@ void keyDebugLoop() {
     mut int c;
     while (cast(char) c != "q"[0]) {
         c = getwchar;
-        if (c == -1 && cxruntime_errno() == 84) {
+        if (c == -1 && neat_runtime_errno() == 84) {
             print("EILSEQ");
             assert(false);
         }

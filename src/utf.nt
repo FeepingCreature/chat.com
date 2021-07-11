@@ -1,6 +1,6 @@
 module utf;
 
-macro import cx.macros.assert;
+macro import neat.macros.assert;
 
 // TODO std.uni, by-codepoint iteration
 int utf8NextLength(string text)

@@ -1,8 +1,8 @@
 module time;
 
-macro import cx.macros.cimport;
+macro import neat.macros.cimport;
 
-import helpers : itoa;
+import std.string : itoa;
 
 import c_header("time.h");
 
