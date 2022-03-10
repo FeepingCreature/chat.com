@@ -28,7 +28,7 @@ struct timespec {
 extern(C) int nanosleep(timespec* req, timespec* rem);
 
 enum SpecialKey {
-    Enter, Backspace, Escape,
+    Enter, Backspace, Escape, Delete,
     Left, Right, Up, Down,
     Home, End,
     F1, F2, F3, F4,
@@ -150,6 +150,10 @@ class Terminal
                         if (ansi == "1P" || ansi == "1Q" || ansi == "1R" || ansi == "1S") {
                             break;
                         }
+                        if (ansi == "1;5D" || ansi == "1;5C") {
+                            // TODO ctrl word movement
+                            break;
+                        }
                     }
                     if (ansi == "11" || ansi == "1P") widget.input((:specialKey, SpecialKey.F1));
                     else if (ansi == "12" || ansi == "1Q") widget.input((:specialKey, SpecialKey.F2));
@@ -163,10 +167,12 @@ class Terminal
                     else if (ansi == "21") widget.input((:specialKey, SpecialKey.F10));
                     else if (ansi == "23") widget.input((:specialKey, SpecialKey.F11));
                     else if (ansi == "24") widget.input((:specialKey, SpecialKey.F12));
+                    else if (ansi == "3") widget.input((:specialKey, SpecialKey.Delete));
                     else if (ansi == "A") widget.input((:specialKey, SpecialKey.Up));
                     else if (ansi == "B") widget.input((:specialKey, SpecialKey.Down));
                     else if (ansi == "C") widget.input((:specialKey, SpecialKey.Right));
                     else if (ansi == "D") widget.input((:specialKey, SpecialKey.Left));
+
                     else if (ansi == "F") widget.input((:specialKey, SpecialKey.End));
                     else if (ansi == "H") widget.input((:specialKey, SpecialKey.Home));
                     continue;

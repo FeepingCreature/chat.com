@@ -368,19 +368,19 @@ class InputField : Widget
             return null;
         }
         view
-            .print("[ ")
             .print(line_[0 .. cursorPos])
             .invert
             .print(cursor)
             .invert
             .print(rest)
-            .printRight(" ]")
         ;
     }
 
     override void render(View view, bool focus) {
         undamage;
-        renderLine(view.go(0, 0));
+        auto view = view.go(0, 0).print("[ ");
+        renderLine(view);
+        view.printRight(" ]");
     }
 
     override void input(InputEvent event) {
@@ -410,6 +410,7 @@ class InputField : Widget
                         delete_;
                     }
                 }
+                if (key == SpecialKey.Delete) delete_;
                 if (key == SpecialKey.Left) stepLeft;
                 if (key == SpecialKey.Right) stepRight;
                 if (key == SpecialKey.Home) home;
