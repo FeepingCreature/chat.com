@@ -30,6 +30,7 @@ extern(C) int nanosleep(timespec* req, timespec* rem);
 enum SpecialKey {
     Enter, Backspace, Escape,
     Left, Right, Up, Down,
+    Home, End,
     F1, F2, F3, F4,
     F5, F6, F7, F8,
     F9, F10, F11, F12,
@@ -166,6 +167,8 @@ class Terminal
                     else if (ansi == "B") widget.input((:specialKey, SpecialKey.Down));
                     else if (ansi == "C") widget.input((:specialKey, SpecialKey.Right));
                     else if (ansi == "D") widget.input((:specialKey, SpecialKey.Left));
+                    else if (ansi == "F") widget.input((:specialKey, SpecialKey.End));
+                    else if (ansi == "H") widget.input((:specialKey, SpecialKey.Home));
                     continue;
                 }
             }
@@ -358,6 +361,13 @@ final class View
 
     View bg(Color bg) {
         this.bg_ = bg;
+        return this;
+    }
+
+    View invert() {
+        (Color fg, Color bg) inv = (this.bg_, this.fg_);
+        this.fg_ = inv.fg;
+        this.bg_ = inv.bg;
         return this;
     }
 

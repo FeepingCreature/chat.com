@@ -333,34 +333,91 @@ class ListDialog : Widget
 
 class InputField : Widget
 {
-    int cursorPos;
+    size_t cursorPos;
 
-    string line;
+    private string line_;
 
-    bool damaged_;
+    (size_t cursorPos, string line) rendered;
 
-    this() { damaged_ = true; }
+    this(this.line_) { }
 
-    override bool damaged() { return damaged_; }
+    override bool damaged() { return (cursorPos, line_) != rendered; }
+
+    void erase() {
+        line_ = "";
+        cursorPos = 0;
+    }
+
+    string line() { return line_; }
+
+    string undamage() {
+        rendered = (cursorPos, line_);
+    }
+
+    void renderLine(View view) {
+        string cursor() {
+            if (cursorPos < line_.length) {
+                return line_[cursorPos .. $].(that[0 .. that.utf8NextLength]);
+            }
+            return " ";
+        }
+        string rest() {
+            if (cursorPos < line_.length) {
+                return line_[cursorPos .. $].(that[that.utf8NextLength .. $]);
+            }
+            return null;
+        }
+        view
+            .print("[ ")
+            .print(line_[0 .. cursorPos])
+            .invert
+            .print(cursor)
+            .invert
+            .print(rest)
+            .printRight(" ]")
+        ;
+    }
 
     override void render(View view, bool focus) {
-        damaged_ = false;
-        view.go(0, 0).print("[ ").print(line).printRight(" ]");
+        undamage;
+        renderLine(view.go(0, 0));
     }
 
     override void input(InputEvent event) {
+        void stepLeft() {
+            if (cursorPos == 0) return;
+            cursorPos -= line[0 .. cursorPos].utf8LastLength;
+        }
+        void stepRight() {
+            if (cursorPos == line.length) return;
+            cursorPos += line[cursorPos .. $].utf8NextLength;
+        }
+        void delete_() {
+            if (cursorPos == line.length) return;
+            line_ = line_[0 .. cursorPos] ~ line_[cursorPos .. $].(that[that.utf8NextLength .. $]);
+        }
+        void home() {
+            cursorPos = 0;
+        }
+        void end() {
+            cursorPos = line.length;
+        }
         event.case {
             (:specialKey, SpecialKey key): {
                 if (key == SpecialKey.Backspace) {
-                    if (line.length > 0) {
-                        line = line.utf8RemoveLastCode;
-                        damaged_ = true;
+                    if (line.length > 0 && cursorPos > 0) {
+                        stepLeft;
+                        delete_;
                     }
                 }
+                if (key == SpecialKey.Left) stepLeft;
+                if (key == SpecialKey.Right) stepRight;
+                if (key == SpecialKey.Home) home;
+                if (key == SpecialKey.End) end;
             }
             (:key, string text): {
-                line ~= text;
-                damaged_ = true;
+                line_ = line_[0 .. cursorPos] ~ text ~ line_[cursorPos .. $];
+                stepRight;
             }
         }
     }
@@ -452,12 +509,12 @@ class ChatWidget : Widget
 
     int renderedGeneration;
 
-    this(this.app) { this.inputField = new InputField; }
+    this(this.app) { this.inputField = new InputField(""); }
 
     override bool damaged() { return inputField.damaged || app.irc.generation != renderedGeneration; }
 
     override void render(View view, bool focus) {
-        inputField.damaged_ = false;
+        inputField.undamage;
         renderedGeneration = app.irc.generation;
         mut View view = view;
         auto irc = app.irc;
@@ -472,7 +529,7 @@ class ChatWidget : Widget
         view.print("┤");
         view.bg(Color.blue).printRight("├──┘");
         view.fg(Color.lyellow);
-        view.go(-1, 3).print(" ").print(inputField.line);
+        inputField.renderLine(view.go(-1, 3).print(" "));
 
         view = view.shrink(1, 1, 1, 1);
 
@@ -528,8 +585,7 @@ class ChatWidget : Widget
                 if (key == SpecialKey.Enter) {
                     // TODO IRC session engine class
                     string line = inputField.line;
-                    inputField.line = "";
-                    inputField.damaged_ = true;
+                    inputField.erase;
 
                     if (line == "/q" || line == "/quit") {
                         if (app.connected) app.irc.sendln("QUIT");
@@ -643,12 +699,9 @@ class ConnectDialog : ListDialog {
     InputField channel;
     InputField nick;
     this(this.app) {
-        server = new InputField;
-        server.line = "irc.libera.chat:6667";
-        channel = new InputField;
-        channel.line = "#lesswrong";
-        nick = new InputField;
-        nick.line = "feep[neat]";
+        server = new InputField("irc.libera.chat:6667");
+        channel = new InputField("#lesswrong");
+        nick = new InputField("feep[neat]");
         this.entries = [
             ListEntry("Server", server),
             ListEntry("Channel", channel),
