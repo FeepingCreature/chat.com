@@ -46,14 +46,18 @@ class MenuBar : Widget
 
     int xsel, ysel;
     bool open;
+    bool damaged_;
 
-    this(this.app, this.entries) { }
+    this(this.app, this.entries) { this.damaged_ = true; }
+
+    override bool damaged() { return this.damaged_; }
 
     override void render(View view, bool focus) {
+        this.damaged_ = false;
         // title line
         view.go(0, 0);
         view.print(" ");
-        for (int i <- 0 .. entries.length) {
+        for (i in 0 .. entries.length) {
             bool entrySelected = focus && i == xsel;
             auto entry = entries[i];
             view.bg(Color.grey).print("  ");
@@ -73,7 +77,8 @@ class MenuBar : Widget
                     );
                     submenu.fg(Color.black).clear(Color.grey).printPrettyBox;
                     submenu = submenu.shrink(1, 1, 1, 1);
-                    for (int j <- 0 .. subentries.length) {
+                    for (j in 0 .. subentries.length) {
+                        int j = cast(int) j;
                         auto subentry = subentries[j];
                         bool subSelected = focus && j == ysel;
                         submenu.go(j, 0).bg(Color.grey).print(" ");
@@ -162,19 +167,21 @@ class MenuBar : Widget
         event.case {
             (:specialKey, SpecialKey key): {
                 if (key == SpecialKey.Escape) { open = false; this.app.focusMain; }
-                if (key == SpecialKey.Right) menuRight;
-                if (key == SpecialKey.Left) menuLeft;
-                if (key == SpecialKey.Down) {
+                else if (key == SpecialKey.Right) menuRight;
+                else if (key == SpecialKey.Left) menuLeft;
+                else if (key == SpecialKey.Down) {
                     if (!open) menuOpen;
                     else menuDown;
                 }
-                if (key == SpecialKey.Up) {
+                else if (key == SpecialKey.Up) {
                     if (!open) menuOpen;
                     if (open) menuUp;
                 }
-                if (key == SpecialKey.Enter) {
+                else if (key == SpecialKey.Enter) {
                     menuActivate;
                 }
+                else return;
+                this.damaged_ = true;
             }
             (:key, string key): { }
         }
@@ -190,6 +197,8 @@ class Window : Widget
     Widget body_;
 
     this(this.title, this.rows, this.cols, this.body_) {}
+
+    override bool damaged() { return body_.damaged; }
 
     override void render(View view, bool focus) {
         mut auto subview = view.select(
@@ -224,16 +233,21 @@ class ListDialog : Widget
 
     (int | :cancel | :ok) position;
 
-    this(this.entries) { position = 0; }
+    bool damaged_;
+
+    this(this.entries) { position = 0; damaged_ = true; }
 
     void ok() { }
     void cancel() { }
 
+    override bool damaged() { return this.damaged_ || [any e.widget.damaged for e in this.entries]; }
+
     override void render(View view, bool focus) {
+        damaged_ = false;
         mut View view = view.shrink(1, 1, 0, 1); // margin
         mut int row = 0;
         int labels = [max cast(int) entry.label.length for entry in entries] + 2;
-        for (int i <- 0 .. entries.length) {
+        for (i in 0 .. entries.length) {
             bool focused = position.case((:cancel): false, (:ok): false, int j: j == i);
             auto entry = entries[i];
             // give it the whole view in case it wants to render say a dropdown
@@ -281,23 +295,29 @@ class ListDialog : Widget
     override void input(InputEvent event) {
         event.case {
             (:specialKey, SpecialKey key): {
+                mut bool keyUsed = true;
                 if (key == SpecialKey.Escape) {
-                    cancel();
-                    return;
+                    cancel;
                 }
                 else if (key == SpecialKey.Enter) {
                     position.case {
-                        (:cancel): { cancel(); return; }
-                        (:ok): { ok(); return; }
-                        int offset: { ok(); return; }
+                        (:cancel): cancel;
+                        (:ok): ok;
+                        int offset: ok;
                     }
                 }
-                else if (key == SpecialKey.Down) { nextPosition; return; }
-                else if (key == SpecialKey.Up) { prevPosition; return; }
+                else if (key == SpecialKey.Down) nextPosition;
+                else if (key == SpecialKey.Up) prevPosition;
+                else keyUsed = false;
+                if (keyUsed) {
+                    this.damaged_ = true;
+                    return;
+                }
             }
             (:key, string text): {
                 if (text == "\t") {
                     nextPosition;
+                    this.damaged_ = true;
                     return;
                 }
             }
@@ -305,20 +325,26 @@ class ListDialog : Widget
         position.case {
             (:cancel): { }
             (:ok): { }
-            int offset: {
+            int offset:
                 entries[offset].widget.input(event);
-            }
         }
     }
 }
 
 class InputField : Widget
 {
+    int cursorPos;
+
     string line;
 
-    this() { }
+    bool damaged_;
+
+    this() { damaged_ = true; }
+
+    override bool damaged() { return damaged_; }
 
     override void render(View view, bool focus) {
+        damaged_ = false;
         view.go(0, 0).print("[ ").print(line).printRight(" ]");
     }
 
@@ -328,24 +354,38 @@ class InputField : Widget
                 if (key == SpecialKey.Backspace) {
                     if (line.length > 0) {
                         line = line.utf8RemoveLastCode;
+                        damaged_ = true;
                     }
                 }
             }
             (:key, string text): {
                 line ~= text;
+                damaged_ = true;
             }
         }
     }
 }
 
 class StatusBar : Widget {
+    string lastStatus;
+    string lastTime;
     this() { }
+    override bool damaged() { return status != lastStatus || time != lastTime; }
+    string status() {
+        return " chat.com - Press F9 for Menu.";
+    }
+    string time() {
+        return Time.now.local;
+    }
     override void render(View view, bool focus) {
         view.go(-1, 0).bg(Color.grey).fg(Color.black);
-        view.print(" chat.com - Press F9 for Menu.");
-        view.printRight("[ " ~ Time.now.local ~ " ] ");
+        view.print(status);
+        view.printRight("[ " ~ time ~ " ] ");
+        lastStatus = status;
+        lastTime = time;
     }
     override void input(InputEvent event) {
+        // this shouldn't be able to gain focus.
         assert(false);
     }
 }
@@ -361,8 +401,9 @@ class Application : Activity
     bool connected;
     string nick, channel;
 
-    override void update() {
+    override bool update() {
         if (irc.ready) irc.pump;
+        return ui.damaged;
     }
 
     this(this.irc) {
@@ -382,14 +423,17 @@ class Application : Activity
 
     void focusMain() {
         this.ui.focus = :mainOrPopup;
+        this.ui.damaged_ = true;
     }
 
     void focusMenu() {
         this.ui.focus = :menuBar;
+        this.ui.damaged_ = true;
     }
 
     void connectDlg() {
         this.ui.popupStack ~= new Window("Connect to Server", 10, 50, new ConnectDialog(this));
+        this.ui.damaged_ = true;
     }
 
     void exit() {
@@ -406,9 +450,15 @@ class ChatWidget : Widget
     // Not rendered.
     InputField inputField;
 
+    int renderedGeneration;
+
     this(this.app) { this.inputField = new InputField; }
 
+    override bool damaged() { return inputField.damaged || app.irc.generation != renderedGeneration; }
+
     override void render(View view, bool focus) {
+        inputField.damaged_ = false;
+        renderedGeneration = app.irc.generation;
         mut View view = view;
         auto irc = app.irc;
         // TODO master list of connections to refresh?
@@ -454,7 +504,7 @@ class ChatWidget : Widget
                 break;
         }
         mut int paneRow = availableLines - usedLines;
-        for (auto msg <- irc.messages[firstMessage .. $]) {
+        for (msg in irc.messages[firstMessage .. $]) {
             string[] msgLines = msg.splitLines;
             for (mut int i = 0; i < msgLines.length; i += 1) {
                 view.go(paneRow, 0);
@@ -479,6 +529,7 @@ class ChatWidget : Widget
                     // TODO IRC session engine class
                     string line = inputField.line;
                     inputField.line = "";
+                    inputField.damaged_ = true;
 
                     if (line == "/q" || line == "/quit") {
                         if (app.connected) app.irc.sendln("QUIT");
@@ -491,12 +542,14 @@ class ChatWidget : Widget
                     if (line.startsWith("/me ")) {
                         string action = line[4 .. $];
                         if (app.connected) {
+                            app.irc.mutated;
                             app.irc.messages ~= Message(Time.now, nick, "* " ~ nick ~ " " ~ action);
                             app.irc.sendln("PRIVMSG " ~ channel ~ " :\x01ACTION " ~ action ~ "\x01");
                         }
                         return;
                     }
                     if (app.connected) {
+                        app.irc.mutated;
                         app.irc.messages ~= Message(Time.now, nick, line);
                         app.irc.sendln("PRIVMSG " ~ channel ~ " :" ~ line);
                     }
@@ -525,17 +578,26 @@ class UserInterface : Widget
 
     (:menuBar | :mainOrPopup) focus;
 
+    bool damaged_;
+
     this(this.menuBar, this.statusBar, this.mainView) {
         this.focus = :mainOrPopup;
+        this.damaged_ = true;
     }
 
     bool menuBarHasFocus() { return focus.case((:menuBar): true, (:mainOrPopup): false); }
     bool mainPopupHasFocus() { return focus.case((:menuBar): false, (:mainOrPopup): true); }
 
+    override bool damaged() {
+        return damaged_ || menuBar.damaged || statusBar.damaged || mainView.damaged ||
+            [any a.damaged for a in popupStack];
+    }
+
     void removePopup(Widget widget) {
         // remove widget, move other widgets back to match, then shorten stack
+        damaged_ = true;
         mut int removing = 0;
-        for (int i <- 0 .. popupStack.length) {
+        for (i in 0 .. popupStack.length) {
             if (popupStack[i] is widget) {
                 removing += 1;
             }
@@ -553,13 +615,14 @@ class UserInterface : Widget
 
     override void render(View view, bool focus) {
         assert(focus); // as opposed to what
+        damaged_ = false;
 
         mainView.render(view.shrink(top_rows=1, 0, bottom_rows=1, 0), mainPopupHasFocus && !popupStack.length);
         statusBar.render(view.shrink(top_rows=view.rows - 1, 0, 0, 0), false);
         menuBar.render(view, menuBarHasFocus); // can paint over main view, for menus
         if (!popupStack.length) return;
         // render bottom to top
-        for (auto widget <- popupStack[0 .. $ - 1])
+        for (widget in popupStack[0 .. $ - 1])
             widget.render(view, false);
         popupStack[$ - 1].render(view, true);
     }
@@ -585,7 +648,7 @@ class ConnectDialog : ListDialog {
         channel = new InputField;
         channel.line = "#lesswrong";
         nick = new InputField;
-        nick.line = "feep[cx]";
+        nick.line = "feep[neat]";
         this.entries = [
             ListEntry("Server", server),
             ListEntry("Channel", channel),
@@ -607,7 +670,7 @@ class ConnectDialog : ListDialog {
             connect(host, port);
             string line = nick.line;
             sendln("NICK " ~ line);
-            sendln("USER " ~ line ~ " * * :feep's cx TUI client");
+            sendln("USER " ~ line ~ " * * :feep's neat TUI client");
             while (!ready) {
                 pump;
             }
@@ -637,16 +700,17 @@ void main() {
 
 void printPrettyBox(View view) {
     view.go(0, 0).print("┌");
-    for (int i <- 0 .. view.cols - 2) {
+    for (i in 0 .. view.cols - 2) {
         view.print("─");
     }
     view.print("┐");
-    for (int i <- 1 .. view.rows) {
+    for (i in 1 .. view.rows) {
+        int i = cast(int) i;
         view.go(i, 0).print("│");
         view.go(i, -1).print("│");
     }
     view.go(-1, 0).print("└");
-    for (int i <- 0 .. view.cols - 2) {
+    for (i in 0 .. view.cols - 2) {
         view.print("─");
     }
     view.print("┘");

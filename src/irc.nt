@@ -24,11 +24,15 @@ class IRC
 
     string partialLineBuf;
 
+    // change counter for damage detection;
+    int generation;
+
     Message[] messages;
 
     bool ready;
 
     this() {
+        this.generation = 0;
         this.sock = socket(/*AF_INET*/PF_INET, SOCK_STREAM, 0);
     }
 
@@ -37,6 +41,8 @@ class IRC
         int ret = .connect(this.sock, address.info.ai_addr, address.info.ai_addrlen);
         assert(ret == 0);
     }
+
+    void mutated() { generation++; }
 
     void process(string line) {
         // puts("\x1B[?1049h");

@@ -13,7 +13,7 @@ import c_header("termios.h");
 import c_header("unistd.h");
 import c_header("wchar.h");
 
-import helpers : itoa;
+import helpers : itoa, toStringz;
 
 import utf;
 
@@ -39,6 +39,8 @@ alias InputEvent = (:key, string text | (:specialKey, SpecialKey key));
 
 class Widget
 {
+    bool damaged() { return true; }
+
     void render(View view, bool focus) { }
 
     void input(InputEvent event) { }
@@ -46,7 +48,7 @@ class Widget
 
 abstract class Activity
 {
-    abstract void update() { }
+    abstract bool update() { }
 }
 
 class Terminal
@@ -73,12 +75,15 @@ class Terminal
     }
 
     void update(Activity activity) {
+        bool damaged = activity.update;
+
+        if (!damaged) return;
+
         auto sz = getSize;
         auto newbuf = new Buffer(sz.rows, sz.cols);
         auto view = newbuf.view;
 
         view.clear(Color.blue);
-        activity.update;
         widget.render(view, true);
         paint(newbuf);
     }
@@ -178,13 +183,14 @@ class Terminal
     }
 
     void paint(Buffer newBuf) {
-        // TODO compare tuples
-        bool refresh = newBuf.rows != currentScreenState.rows || newBuf.cols != currentScreenState.cols;
-        mut Color fg, bg;
-        for (int i <- 0 .. newBuf.rows) {
+        bool refresh = newBuf.((rows, cols)) != currentScreenState.((rows, cols));
+        mut Color fg = Color.black, bg = Color.black;
+        for (i in 0 .. newBuf.rows) {
+            int i = cast(int) i;
             auto line = newBuf.line(i);
             mut bool mustGoTo = true;
-            for (int k <- 0 .. newBuf.cols) {
+            for (k in 0 .. newBuf.cols) {
+                int k = cast(int) k;
                 auto tile = line[k];
                 if (!refresh) {
                     auto oldLine = currentScreenState.line(i);
@@ -322,12 +328,12 @@ final class View
     View printRight(string msg) {
         // TODO cutoff
         int start = this.row * this.cols;
-        for (int i <- this.col .. this.cols - msg.utf8Length) {
-            putchar(row=this.row, col=i, ch=" ");
+        for (i in this.col .. this.cols - msg.utf8Length) {
+            putchar(row=this.row, col=cast(int) i, ch=" ");
             this.col += 1;
         }
         mut int k;
-        for (int i <- 0 .. msg.utf8Length) {
+        for (i in 0 .. msg.utf8Length) {
             auto chlen = msg[k .. $].utf8NextLength;
             auto ch = msg[k .. k + chlen];
             k += chlen;
@@ -357,9 +363,9 @@ final class View
 
     View clear(Color bg) {
         this.bg_ = bg;
-        for (int y <- 0 .. this.rows) {
-            for (int x <- 0 .. this.cols) {
-                putchar(row=y, col=x, ch=" ");
+        for (y in 0 .. this.rows) {
+            for (x in 0 .. this.cols) {
+                putchar(row=cast(int) y, col=cast(int) x, ch=" ");
             }
         }
         return this;
@@ -385,8 +391,8 @@ final class View
 
     View fillRow() {
         int base = this.row * this.cols + this.col;
-        for (int i <- 0 .. this.cols - this.col) {
-            putchar(row=this.row, col=this.col + i, ch=" ");
+        for (i in 0 .. this.cols - this.col) {
+            putchar(row=this.row, col=this.col + cast(int) i, ch=" ");
         }
         return this;
     }

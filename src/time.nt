@@ -22,7 +22,7 @@ struct Time {
     }
 }
 
-string itoa_fill(int width, int value) {
+private string itoa_fill(int width, int value) {
     mut string res = itoa(value);
     while (res.length < width) res = "0" ~ res;
     return res;
