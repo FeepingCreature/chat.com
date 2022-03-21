@@ -14,8 +14,11 @@ import time;
 struct Message
 {
     Time time;
-    string name;
-    string line;
+    (:channel, string channel | :server) target;
+    (
+        (:say, string user, string message) |
+        (:action, string user, string message) |
+        (:system, string message)) content;
 }
 
 class IRC
@@ -24,25 +27,38 @@ class IRC
 
     string partialLineBuf;
 
-    // change counter for damage detection;
-    int generation;
+    // change counter for damage detection. never decrements, even if messages are truncated.
+    // better not send more than two billion lines
+    int numMessages;
 
     Message[] messages;
+
+    bool connected;
 
     bool ready;
 
     this() {
-        this.generation = 0;
+        this.numMessages = 0;
         this.sock = socket(/*AF_INET*/PF_INET, SOCK_STREAM, 0);
+    }
+
+    Message message(int offset) {
+        // say numMessages is 200, offset is 195
+        // $ is 20, then we get 15.
+        return messages[$ - (numMessages - offset)];
     }
 
     void connect(string host, int port) {
         auto address = new Address(host, port);
         int ret = .connect(this.sock, address.info.ai_addr, address.info.ai_addrlen);
         assert(ret == 0);
+        this.connected = true;
     }
 
-    void mutated() { generation++; }
+    void append(Message message) {
+        numMessages++;
+        messages ~= message;
+    }
 
     void process(string line) {
         // puts("\x1B[?1049h");
@@ -51,7 +67,7 @@ class IRC
             sendln("PONG " ~ line[5 .. $]);
             return;
         }
-        if (line.find(" 376 ") != -1) {
+        if (line.find(" 376 ") != -1 || line.find(" 422 ") != -1) {
             // end of motd
             this.ready = true;
             return;
@@ -59,13 +75,23 @@ class IRC
         auto parts = line.split(" ");
         string mask = parts[0];
         string cmd = parts[1];
+        if (cmd == "JOIN") {
+            // FIXME string msg = parts[2 .. $].join(" ").(that[that.find(":") + 1 .. $]);
+            mut string msg = parts[2 .. $].join(" ");
+            msg = msg[msg.find(":") + 1 .. $];
+            append(Message(Time.now, (:channel, msg), (:system, "$(mask.user) joined channel!")));
+            return;
+        }
         if (cmd == "PRIVMSG") {
             string channel = parts[2];
             mut string msg = parts[3 .. $].join(" ");
             msg = msg[msg.find(":") + 1 .. $];
             // print("<" ~ mask.user ~ "> " ~ msg);
-            messages ~= Message(Time.now, mask.user, msg);
+            append(Message(Time.now, (:channel, channel), (:say, mask.user, msg)));
+            return;
         }
+        string msg = parts[1 .. $].join(" ");
+        append(Message(Time.now, :server, (:system, msg)));
         // puts("\x1B[?1049l");
     }
 
@@ -92,17 +118,18 @@ class IRC
         }
     }
 
-    void pump() {
-        while (true) {
-            auto buf = new char[](1024);
-            int ret = cast(int) recv(this.sock, buf.ptr, cast(int) buf.length, /*MSG_DONTWAIT*/0x40);
-            if (ret == -1 && (neat_runtime_errno() == EAGAIN/* || neat_runtime_errno() == EWOULDBLOCK*/))
-                return;
-            assert(ret > 0);
-            this.partialLineBuf ~= buf[0 .. ret];
-            while (this.partialLineBuf.find("\n") != -1) {
-                flushLine;
-            }
+    void update() {
+        auto buf = new char[](1024);
+        int ret = cast(int) recv(this.sock, buf.ptr, cast(int) buf.length, /*MSG_DONTWAIT*/0x40);
+        if (ret == -1 && (neat_runtime_errno() == EAGAIN/* || neat_runtime_errno() == EWOULDBLOCK*/))
+            return;
+        if (ret <= 0) {
+            print("failed: $(neat_runtime_errno()) ");
+            assert(false);
+        }
+        this.partialLineBuf ~= buf[0 .. ret];
+        while (this.partialLineBuf.find("\n") != -1) {
+            flushLine;
         }
     }
 }

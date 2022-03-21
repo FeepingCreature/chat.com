@@ -11,7 +11,8 @@ import c_header("string.h");
 import c_header("unistd.h");
 import c_header("wchar.h");
 
-import helpers : itoa, print;
+import helpers : assert, itoa, print;
+import std.algorithm;
 import std.string;
 
 import irc;
@@ -448,23 +449,100 @@ class StatusBar : Widget {
     }
 }
 
-class Application : Activity
+class IRCSession
 {
     IRC irc;
+
+    int resolvedMessages;
+
+    string nick;
+
+    // TODO accumulate in one list instead of per session
+    (string window, int numMessages, Message[] messages)[] windows;
+
+    this(this.irc) { this.resolvedMessages = 0; }
+
+    void connect(string host, int port, string nick, string channel) {
+        this.nick = nick;
+        this.irc.connect(host, port);
+        this.irc.sendln("NICK $(nick)");
+        this.irc.sendln("USER $(nick) * * :feep's neat TUI client");
+        this.irc.sendln("JOIN $(channel)");
+        Message[] nullMsg;
+        // FIXME remove magic constants
+        windows ~= ("Server", 0, nullMsg);
+        windows ~= (channel, 0, nullMsg);
+    }
+
+    void deleteWindow(string window) {
+        this.windows = [a for a in this.windows where a.window != window];
+    }
+
+    int numMessagesFor(string window) {
+        return [first w.numMessages for w in windows where w.window == window else 0];
+    }
+
+    Message[] messagesFor(string window) {
+        return [first w.messages for w in windows where w.window == window else null];
+    }
+
+    void update() {
+        if (irc.connected) irc.update;
+        for (i in resolvedMessages .. irc.numMessages) {
+            auto message = irc.message(cast(int) i);
+            auto window = message.target.case((:server): "Server", (:channel, string channel): channel);
+            addToWindow(window, message);
+        }
+        this.resolvedMessages = irc.numMessages;
+        // TODO we can truncate irc messages here, since we've consumed them
+    }
+    void addToWindow(string window, Message message) {
+        if (!windows.any(w => w.window == window)) {
+            Message[] nullMsg; // TODO Message[].init or convert null
+            windows ~= (window, 0, nullMsg);
+        }
+        int offset = [first cast(int) i for i, w in windows where w.window == window];
+        windows[offset].messages ~= message;
+        windows[offset].numMessages += 1;
+    }
+}
+
+struct IRCWindowKey
+{
+    IRCSession session;
+
+    string window;
+
+    string name() { return window; }
+}
+
+class Application : Activity
+{
+    IRCSession[] sessions;
 
     Terminal term;
 
     UserInterface ui;
 
-    bool connected;
-    string nick, channel;
-
     override bool update() {
-        if (irc.ready) irc.pump;
+        [session.update for session in sessions];
         return ui.damaged;
     }
 
-    this(this.irc) {
+    void select(IRCWindowKey key) {
+        // TODO select when JOIN is received?
+        ui.mainView.instanceOf(ChatWidget).selected = key;
+    }
+
+    void remove(IRCWindowKey key) {
+        ui.mainView.instanceOf(ChatWidget).remove(key);
+    }
+
+    IRCWindowKey[] windows() {
+        return [join [IRCWindowKey(session, window.window) for window in session.windows] for session in sessions];
+    }
+
+    this() {
         mut SubMenu[] menu;
         void help() { }
         menu ~= SubMenu("Application", [
@@ -503,26 +581,45 @@ class ChatWidget : Widget
 {
     Application app;
 
-    string channel;
-
     // Not rendered.
     InputField inputField;
 
+    (:none | IRCWindowKey) selected;
+
     int renderedGeneration;
 
-    this(this.app) { this.inputField = new InputField(""); }
+    this(this.app) { this.inputField = new InputField(""); this.selected = :none; }
 
-    override bool damaged() { return inputField.damaged || app.irc.generation != renderedGeneration; }
+    override bool damaged() {
+        if (inputField.damaged)
+            return true;
+        return selected.case(
+            (:none): false,
+            IRCWindowKey key: key.session.numMessagesFor(key.window) != renderedGeneration);
+    }
+
+    void remove(IRCWindowKey key) {
+        key.session.deleteWindow(key.window);
+    }
 
     override void render(View view, bool focus) {
         inputField.undamage;
-        renderedGeneration = app.irc.generation;
         mut View view = view;
-        auto irc = app.irc;
-        // TODO master list of connections to refresh?
+        mut Message[] messages;
+        selected.case {
+            (:none): {}
+            IRCWindowKey key:
+                messages = key.session.messagesFor(key.window);
+                renderedGeneration = key.session.numMessagesFor(key.window);
+        }
 
         // chat box
         view.fg(Color.lwhite).bg(Color.blue).printPrettyBox;
+        // windows
+        view.go(0, 2);
+        for (i, window in app.windows) {
+            view.invert.print("[ $i: $(window.name) ]").invert.skip(1);
+        }
 
         // input line
         view.go(-1, 2);
@@ -535,11 +632,11 @@ class ChatWidget : Widget
         view = view.shrink(1, 1, 1, 1);
 
         string[] splitLines(Message msg) {
-            int space = view.cols - cast(int) (" [00:00:00] <".length + msg.name.length + "> ".length);
+            int space = view.cols - cast(int) (" [00:00:00]".length + msg.headerWidth);
             assert(space > 0);
 
             mut string[] result;
-            mut string remainder = msg.line;
+            mut string remainder = msg.contentPart;
             while (remainder.length > 0) {
                 auto prefix = remainder.takeTiles(space);
                 result ~= prefix;
@@ -554,25 +651,23 @@ class ChatWidget : Widget
 
         int availableLines = view.rows;
         mut int usedLines;
-        mut int firstMessage = cast(int) irc.messages.length;
+        mut int firstMessage = cast(int) messages.length;
         while (firstMessage > 0) {
             firstMessage -= 1;
-            usedLines += irc.messages[firstMessage].needsLines;
+            usedLines += messages[firstMessage].needsLines;
             if (usedLines >= availableLines)
                 break;
         }
         mut int paneRow = availableLines - usedLines;
-        for (msg in irc.messages[firstMessage .. $]) {
+        for (msg in messages[firstMessage .. $]) {
             string[] msgLines = msg.splitLines;
             for (mut int i = 0; i < msgLines.length; i += 1) {
                 view.go(paneRow, 0);
                 if (i == 0) {
                     view.bg(Color.blue).fg(Color.black).print(" [" ~ msg.time.local ~ "]");
-                    view.skip(1).fg(Color.white).print("<");
-                    view.fg(Color.lwhite).print(msg.name);
-                    view.fg(Color.white).print(">").skip(1);
+                    msg.renderHeader(view);
                 } else {
-                    view.skip(cast(int) ("[00:00:00] <".length + msg.name.length + "> ".length));
+                    view.skip(cast(int) (" [00:00:00]".length + msg.headerWidth));
                 }
                 paneRow += 1;
                 view.fg(Color.lwhite).print(msgLines[i]);
@@ -584,32 +679,78 @@ class ChatWidget : Widget
         event.case {
             (:specialKey, SpecialKey key): {
                 if (key == SpecialKey.Enter) {
+                    import std.string : atoi;
+
                     // TODO IRC session engine class
                     string line = inputField.line;
                     inputField.erase;
 
-                    if (line == "/q" || line == "/quit") {
-                        if (app.connected) app.irc.sendln("QUIT");
+                    if (line.startsWith("/")) {
+                        auto cmdline = line[1 .. $];
+                        auto cmd = cmdline.split(" ")[0];
+                        auto args = cmdline.split(" ")[1 .. $];
+                        if (cmd == cmd.atoi.("$that")) {
+                            int window = cmd.atoi;
+                            if (window >= 0 && window < app.windows.length) {
+                                app.select(app.windows[window]);
+                            }
+                        }
+                        if (cmd == "quit") {
+                            for (session in app.sessions) {
+                                if (session.irc.connected) {
+                                    session.irc.sendln("QUIT");
+                                }
+                            }
 
-                        app.term.running = false;
-                        return;
-                    }
-                    string channel = app.channel;
-                    string nick = app.nick;
-                    if (line.startsWith("/me ")) {
-                        string action = line[4 .. $];
-                        if (app.connected) {
-                            app.irc.mutated;
-                            app.irc.messages ~= Message(Time.now, nick, "* " ~ nick ~ " " ~ action);
-                            app.irc.sendln("PRIVMSG " ~ channel ~ " :\x01ACTION " ~ action ~ "\x01");
+                            app.term.running = false;
+                        }
+                        if (cmd == "j" || cmd == "join") {
+                            // TODO if (IRCWindowKey key <- selected)
+                            selected.case {
+                                (:none): {}
+                                IRCWindowKey key:
+                                    for (channel in args) {
+                                        key.session.irc.sendln("JOIN $channel");
+                                    }
+                            }
+                        }
+                        if (cmd == "q") {
+                            selected.case {
+                                (:none): {}
+                                IRCWindowKey key:
+                                    key.session.irc.sendln("PART $(key.window)");
+                                    int offset = [
+                                        first cast(int) i for i, w in app.windows
+                                        where w.session is key.session && w.window == key.window
+                                        else 0];
+                                    app.remove(key);
+                                    if (app.windows.length > 0) {
+                                        app.select(app.windows[min(cast(int) $ - 1, offset)]);
+                                    } else {
+                                        selected = :none;
+                                    }
+                            }
                         }
                         return;
                     }
-                    if (app.connected) {
-                        app.irc.mutated;
-                        app.irc.messages ~= Message(Time.now, nick, line);
-                        app.irc.sendln("PRIVMSG " ~ channel ~ " :" ~ line);
+                    void v;
+                    auto key = selected.case((:none): return v, IRCWindowKey key: key);
+                    auto session = key.session;
+                    string channel = key.window;
+                    if (channel == "Server") return;
+                    string nick = session.nick;
+                    if (!session.irc.ready) {
+                        session.irc.append(Message(Time.now, (:channel, channel), (:system, "Not ready!")));
+                        return;
                     }
+                    if (line.startsWith("/me ")) {
+                        string action = line[4 .. $];
+                        session.irc.append(Message(Time.now, (:channel, channel), (:action, nick, action)));
+                        session.irc.sendln("PRIVMSG " ~ channel ~ " :\x01ACTION " ~ action ~ "\x01");
+                        return;
+                    }
+                    session.irc.append(Message(Time.now, (:channel, channel), (:say, nick, line)));
+                    session.irc.sendln("PRIVMSG " ~ channel ~ " :" ~ line);
                     return;
                 }
                 if (key == SpecialKey.F9) {
@@ -620,6 +761,46 @@ class ChatWidget : Widget
             (:key, string text): { }
         }
         inputField.input(event);
+    }
+}
+
+string contentPart(Message message) {
+    message.content.case {
+        (:say, string user, string message):
+            return message;
+        (:action, string user, string message):
+            return message;
+        (:system, string message):
+            return message;
+    }
+}
+
+void renderHeader(Message message, View view)
+{
+    message.content.case {
+        (:say, string user, string message):
+            view.skip(1).fg(Color.white).print("<");
+            view.fg(Color.lwhite).print(user);
+            view.fg(Color.white).print(">").skip(1);
+        (:action, string user, string message):
+            view.skip(1).fg(Color.white).print(" * ");
+            view.fg(Color.lwhite).print(user);
+            view.fg(Color.white).skip(1);
+        (:system, string message):
+            view.skip(1).fg(Color.white).print(" *** ");
+            view.fg(Color.lwhite);
+    }
+}
+
+size_t headerWidth(Message message)
+{
+    message.content.case {
+        (:say, string user, string message):
+            return "<".length + user.length + "> ".length;
+        (:action, string user, string message):
+            return " * ".length + user.length + " ".length;
+        (:system, string message):
+            return " *** ".length;
     }
 }
 
@@ -700,9 +881,9 @@ class ConnectDialog : ListDialog {
     InputField channel;
     InputField nick;
     this(this.app) {
-        server = new InputField("irc.libera.chat:6667");
-        channel = new InputField("#lesswrong");
-        nick = new InputField("feep[neat]");
+        server = new InputField("localhost:6667");
+        channel = new InputField("#test");
+        nick = new InputField("feep_neat");
         this.entries = [
             ListEntry("Server", server),
             ListEntry("Channel", channel),
@@ -717,20 +898,11 @@ class ConnectDialog : ListDialog {
 
         this.app.ui.removePopup(this);
         string host = server.line.split(":")[0];
-        this.app.nick = nick.line;
-        this.app.channel = channel.line;
         int port = server.line.split(":")[1].atoi;
-        with (this.app.irc) {
-            connect(host, port);
-            string line = nick.line;
-            sendln("NICK " ~ line);
-            sendln("USER " ~ line ~ " * * :feep's neat TUI client");
-            while (!ready) {
-                pump;
-            }
-            sendln("JOIN " ~ channel.line);
-        }
-        this.app.connected = true;
+        auto session = new IRCSession(new IRC);
+        app.sessions ~= session;
+        session.connect(host, port, nick=nick.line, channel.line);
+        app.select(IRCWindowKey(session, channel.line));
     }
 }
 
@@ -744,8 +916,7 @@ void main() {
     term.disableRawMode;
     return;*/
 
-    auto irc = new IRC;
-    auto app = new Application(irc);
+    auto app = new Application;
     auto term = new Terminal(app.ui);
     app.term = term;
 
