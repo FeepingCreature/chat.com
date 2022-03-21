@@ -662,15 +662,17 @@ class ChatWidget : Widget
         for (msg in messages[firstMessage .. $]) {
             string[] msgLines = msg.splitLines;
             for (mut int i = 0; i < msgLines.length; i += 1) {
-                view.go(paneRow, 0);
-                if (i == 0) {
-                    view.bg(Color.blue).fg(Color.black).print(" [" ~ msg.time.local ~ "]");
-                    msg.renderHeader(view);
-                } else {
-                    view.skip(cast(int) (" [00:00:00]".length + msg.headerWidth));
+                if (paneRow >= 0) {
+                    view.go(paneRow, 0);
+                    if (i == 0) {
+                        view.bg(Color.blue).fg(Color.black).print(" [" ~ msg.time.local ~ "]");
+                        msg.renderHeader(view);
+                    } else {
+                        view.skip(cast(int) (" [00:00:00]".length + msg.headerWidth));
+                    }
+                    view.fg(Color.lwhite).print(msgLines[i]);
                 }
                 paneRow += 1;
-                view.fg(Color.lwhite).print(msgLines[i]);
             }
         }
     }
@@ -796,11 +798,11 @@ size_t headerWidth(Message message)
 {
     message.content.case {
         (:say, string user, string message):
-            return "<".length + user.length + "> ".length;
+            return " <".length + user.length + "> ".length;
         (:action, string user, string message):
-            return " * ".length + user.length + " ".length;
+            return "  * ".length + user.length + " ".length;
         (:system, string message):
-            return " *** ".length;
+            return "  *** ".length;
     }
 }
 
