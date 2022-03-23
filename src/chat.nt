@@ -340,7 +340,7 @@ class InputField : Widget
 
     (size_t cursorPos, string line) rendered;
 
-    this(this.line_) { }
+    this(this.line_) { this.cursorPos = this.line_.length; }
 
     override bool damaged() { return (cursorPos, line_) != rendered; }
 
@@ -785,11 +785,11 @@ void renderHeader(Message message, View view)
             view.fg(Color.lwhite).print(user);
             view.fg(Color.white).print(">").skip(1);
         (:action, string user, string message):
-            view.skip(1).fg(Color.white).print(" * ");
+            view.skip(1).fg(Color.white).print("* ");
             view.fg(Color.lwhite).print(user);
             view.fg(Color.white).skip(1);
         (:system, string message):
-            view.skip(1).fg(Color.white).print(" *** ");
+            view.skip(1).fg(Color.white).print("*** ");
             view.fg(Color.lwhite);
     }
 }
@@ -800,9 +800,9 @@ size_t headerWidth(Message message)
         (:say, string user, string message):
             return " <".length + user.length + "> ".length;
         (:action, string user, string message):
-            return "  * ".length + user.length + " ".length;
+            return " * ".length + user.length + " ".length;
         (:system, string message):
-            return "  *** ".length;
+            return " *** ".length;
     }
 }
 
