@@ -1,6 +1,6 @@
 module time;
 
-macro import neat.macros.cimport;
+macro import std.macro.cimport;
 
 import std.string : itoa;
 
