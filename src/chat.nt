@@ -498,8 +498,7 @@ class IRCSession
     }
     void addToWindow(string window, Message message) {
         if (!windows.any(w => w.window == window)) {
-            Message[] nullMsg; // TODO Message[].init or convert null
-            windows ~= (window, 0, nullMsg);
+            windows ~= (window, 0, []);
         }
         int offset = [first cast(int) i for i, w in windows where w.window == window];
         windows[offset].messages ~= message;

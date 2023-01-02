@@ -10,6 +10,7 @@ import c_header("stdio.h");
 import c_header("stdlib.h");
 import c_header("sys/ioctl.h");
 import c_header("termios.h");
+import c_header("time.h");
 import c_header("unistd.h");
 import c_header("wchar.h");
 
@@ -18,14 +19,6 @@ import helpers : itoa, toStringz;
 import utf;
 
 extern(C) int neat_runtime_errno();
-
-// TODO fix C import
-struct timespec {
-    time_t tv_sec;
-    long tv_nsec;
-}
-
-extern(C) int nanosleep(timespec* req, timespec* rem);
 
 enum SpecialKey {
     Enter, Backspace, Escape, Delete,
@@ -36,7 +29,7 @@ enum SpecialKey {
     F9, F10, F11, F12,
 }
 
-alias InputEvent = (:key, string text | (:specialKey, SpecialKey key));
+alias InputEvent = (:key, string | (:specialKey, SpecialKey));
 
 class Widget
 {
@@ -204,7 +197,7 @@ class Terminal
                 if (!refresh) {
                     auto oldLine = currentScreenState.line(i);
                     auto oldTile = oldLine[k];
-                    if (tile.eq(oldTile)) {
+                    if (tile == oldTile) {
                         mustGoTo = true;
                         continue;
                     }
@@ -254,11 +247,6 @@ struct Tile
 {
     string ch; // may be unicode, TODO int
     Color fg, bg;
-
-    // TODO default gen
-    bool eq(Tile other) {
-        return ch == other.ch && fg == other.fg && bg == other.bg;
-    }
 }
 
 enum Color
@@ -435,8 +423,8 @@ class Buffer
     }
 }
 
-// TODO variadics
-extern(C) int ioctl(int, int, void*);
+// TODO variadics in importc
+extern(C) int ioctl(int, int, ...);
 
 void puts(string msg) {
     write(STDOUT_FILENO, msg.ptr, msg.length);

@@ -76,23 +76,18 @@ class IRC
         string mask = parts[0];
         string cmd = parts[1];
         if (cmd == "JOIN") {
-            // FIXME string msg = parts[2 .. $].join(" ").(that[that.find(":") + 1 .. $]);
-            mut string msg = parts[2 .. $].join(" ");
-            msg = msg[msg.find(":") + 1 .. $];
+            string msg = parts[2 .. $].join(" ").(that[that.find(":") + 1 .. $]);
             append(Message(Time.now, (:channel, msg), (:system, "$(mask.user) joined channel!")));
             return;
         }
         if (cmd == "PART") {
-            // FIXME string msg = parts[2 .. $].join(" ").(that[that.find(":") + 1 .. $]);
-            mut string msg = parts[2 .. $].join(" ");
-            msg = msg[msg.find(":") + 1 .. $];
+            string msg = parts[2 .. $].join(" ").(that[that.find(":") + 1 .. $]);
             append(Message(Time.now, (:channel, msg), (:system, "$(mask.user) left channel!")));
             return;
         }
         if (cmd == "PRIVMSG") {
             string channel = parts[2];
-            mut string msg = parts[3 .. $].join(" ");
-            msg = msg[msg.find(":") + 1 .. $];
+            string msg = parts[3 .. $].join(" ").(that[that.find(":") + 1 .. $]);
             if (msg.startsWith("\x01ACTION ")) {
                 auto action = msg["\x01ACTION ".length .. $ - 1];
                 append(Message(Time.now, (:channel, channel), (:action, mask.user, action)));
