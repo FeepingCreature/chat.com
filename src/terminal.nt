@@ -49,11 +49,11 @@ class Terminal
 {
     termios original;
 
-    Buffer currentScreenState;
+    mut Buffer currentScreenState;
 
     Widget widget;
 
-    bool running;
+    mut bool running;
 
     (int rows, int cols) getSize() {
         mut winsize sz;
@@ -94,10 +94,10 @@ class Terminal
                         (:none): { }
                     }
                     for (mut int i = 0; i < 10; i += 1) {
-                        int data;
+                        mut int data;
                         ioctl(0, FIONREAD, &data);
                         if (data == 0) {
-                            timespec sleep = timespec(0, 10000000);
+                            mut timespec sleep = timespec(0, 10000000);
                             nanosleep(&sleep, null);
                             continue;
                         }
@@ -274,10 +274,10 @@ final class View
     Buffer target;
 
     // relative to viewmask
-    int row, col;
+    mut int row, col;
 
     // print state
-    Color fg_, bg_;
+    mut Color fg_, bg_;
 
     // TODO decouple viewmask from rows/cols so we can have windows half-hidden behind surrounding decoration
     ((int row, int col) from, (int row, int col) to) viewmask;
@@ -406,19 +406,19 @@ class Buffer
 {
     int rows, cols;
 
-    Tile[] text;
+    mut Tile mut[] text;
 
     int row, col;
 
     this(this.rows, this.cols) {
-        this.text = new Tile[](this.rows * this.cols);
+        this.text = new Tile mut[](this.rows * this.cols);
     }
 
     View view() {
         return new View(this, 0, 0, rows, cols);
     }
 
-    Tile[] line(int row) {
+    Tile mut[] line(int row) {
         return this.text[this.cols * row .. this.cols * (row + 1)];
     }
 }

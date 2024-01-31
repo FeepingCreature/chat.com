@@ -25,17 +25,17 @@ class IRC
 {
     int sock;
 
-    string partialLineBuf;
+    mut string partialLineBuf;
 
     // change counter for damage detection. never decrements, even if messages are truncated.
     // better not send more than two billion lines
-    int numMessages;
+    mut int numMessages;
 
-    Message[] messages;
+    mut Message[] messages;
 
-    bool connected;
+    mut bool connected;
 
-    bool ready;
+    mut bool ready;
 
     this() {
         this.numMessages = 0;
@@ -119,7 +119,7 @@ class IRC
     void send(string msg) {
         mut int sent;
         while (sent < msg.length) {
-            int ret = cast(int) .send(this.sock, &msg[sent], msg.length - sent, 0);
+            int ret = cast(int) .send(this.sock, &msg.ptr[sent], msg.length - sent, 0);
             assert(ret > 0);
             sent += ret;
         }

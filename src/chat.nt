@@ -45,9 +45,9 @@ class MenuBar : Widget
 
     SubMenu[] entries;
 
-    int xsel, ysel;
-    bool open;
-    bool damaged_;
+    mut int xsel, ysel;
+    mut bool open;
+    mut bool damaged_;
 
     this(this.app, this.entries) { this.damaged_ = true; }
 
@@ -232,9 +232,9 @@ class ListDialog : Widget
 {
     ListEntry[] entries;
 
-    (int | :cancel | :ok) position;
+    mut (int | :cancel | :ok) position;
 
-    bool damaged_;
+    mut bool damaged_;
 
     this(this.entries) { position = 0; damaged_ = true; }
 
@@ -334,11 +334,11 @@ class ListDialog : Widget
 
 class InputField : Widget
 {
-    size_t cursorPos;
+    mut size_t cursorPos;
 
-    private string line_;
+    private mut string line_;
 
-    (size_t cursorPos, string line) rendered;
+    mut (size_t cursorPos, string line) rendered;
 
     this(this.line_) { this.cursorPos = this.line_.length; }
 
@@ -426,8 +426,8 @@ class InputField : Widget
 }
 
 class StatusBar : Widget {
-    string lastStatus;
-    string lastTime;
+    mut string lastStatus;
+    mut string lastTime;
     this() { }
     override bool damaged() { return status != lastStatus || time != lastTime; }
     string status() {
@@ -453,12 +453,12 @@ class IRCSession
 {
     IRC irc;
 
-    int resolvedMessages;
+    mut int resolvedMessages;
 
-    string nick;
+    mut string nick;
 
     // TODO accumulate in one list instead of per session
-    (string window, int numMessages, Message[] messages)[] windows;
+    mut (string window, int numMessages, Message[] messages) mut[] windows;
 
     this(this.irc) { this.resolvedMessages = 0; }
 
@@ -475,7 +475,7 @@ class IRCSession
     }
 
     void deleteWindow(string window) {
-        this.windows = [a for a in this.windows where a.window != window];
+        this.windows = [a for a in this.windows where a.window != window].dup;
     }
 
     int numMessagesFor(string window) {
@@ -517,9 +517,9 @@ struct IRCWindowKey
 
 class Application : Activity
 {
-    IRCSession[] sessions;
+    mut IRCSession[] sessions;
 
-    Terminal term;
+    mut Terminal term;
 
     UserInterface ui;
 
@@ -543,7 +543,6 @@ class Application : Activity
 
     this() {
         mut SubMenu[] menu;
-        void help() { }
         menu ~= SubMenu("Application", [
             MenuEntry("Connect...", &connectDlg),
             // MenuEntry("Reconnect", &exit),
@@ -555,6 +554,8 @@ class Application : Activity
         auto chat = new ChatWidget(this);
         this.ui = new UserInterface(menu, new StatusBar, chat);
     }
+
+    void help() { }
 
     void focusMain() {
         this.ui.focus = :mainOrPopup;
@@ -583,9 +584,9 @@ class ChatWidget : Widget
     // Not rendered.
     InputField inputField;
 
-    (:none | IRCWindowKey) selected;
+    mut (:none | IRCWindowKey) selected;
 
-    int renderedGeneration;
+    mut int renderedGeneration;
 
     this(this.app) { this.inputField = new InputField(""); this.selected = :none; }
 
@@ -813,11 +814,11 @@ class UserInterface : Widget
 
     Widget mainView;
 
-    Widget[] popupStack;
+    mut Widget mut[] popupStack;
 
-    (:menuBar | :mainOrPopup) focus;
+    mut (:menuBar | :mainOrPopup) focus;
 
-    bool damaged_;
+    mut bool damaged_;
 
     this(this.menuBar, this.statusBar, this.mainView) {
         this.focus = :mainOrPopup;
